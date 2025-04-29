@@ -13,7 +13,7 @@ export const authenticateTenant = async (req, res, next) => {
         // Find the API token
         const apiToken = await db.apiToken.findUnique({
             where: { key: apiKey },
-            include: { tenant: true }
+            include: { tenant: true },
         });
         if (!apiToken || !apiToken.isActive) {
             return res.status(401).json({ error: "Invalid or revoked API key" });
@@ -30,7 +30,7 @@ export const authenticateTenant = async (req, res, next) => {
         // Update last used timestamp
         await db.apiToken.update({
             where: { id: apiToken.id },
-            data: { lastUsedAt: new Date() }
+            data: { lastUsedAt: new Date() },
         });
         // Attach tenant to request
         req.tenant = apiToken.tenant;
@@ -51,8 +51,8 @@ export const authenticateTenant = async (req, res, next) => {
  * Middleware to authenticate API key and load tenant with domain validation
  */
 // export const authenticateTenant = async (
-//   req: TenantRequest, 
-//   res: Response, 
+//   req: TenantRequest,
+//   res: Response,
 //   next: NextFunction
 // ) => {
 //   try {
@@ -64,7 +64,7 @@ export const authenticateTenant = async (req, res, next) => {
 //     // Find the API token
 //     const apiToken = await db.apiToken.findUnique({
 //       where: { key: apiKey },
-//       include: { 
+//       include: {
 //         tenant: {
 //           include: {
 //             authorizedDomains: true // Include tenant's authorized domains
@@ -107,16 +107,16 @@ export const authenticateTenant = async (req, res, next) => {
 //             }
 //           );
 //           if (!isAllowedDomain) {
-//             return res.status(403).json({ 
+//             return res.status(403).json({
 //               error: "This domain is not authorized for this tenant",
 //               requestOrigin: originDomain
 //             });
 //           }
 //         } catch (urlError) {
 //           // Invalid origin URL format
-//           return res.status(403).json({ 
-//             error: "Invalid origin format", 
-//             providedOrigin: origin 
+//           return res.status(403).json({
+//             error: "Invalid origin format",
+//             providedOrigin: origin
 //           });
 //         }
 //       }

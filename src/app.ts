@@ -10,6 +10,7 @@ import {
   PollRouter,
   ParticipantRouter,
   QuizRouter,
+  TenantMeRouter,
 } from "./routes/index.js";
 import { authenticateTenant } from "./middlewares/tenant-auth.middleware.js";
 import createSocketServer from "./websocket.js";
@@ -48,13 +49,14 @@ app.use(cors(corsOptions));
 // Add body logging middleware for debugging
 app.use((req: Request, res: Response, next) => {
   // console.log(req)
+  // console.log(`Request received: ${req.method} ${req.url}`);
   next();
 });
 
-app.use("/tenant", TenantRouter.default.publicRoutes);
-app.use("/tenant/me", TenantRouter.default.protectedRoutes);
+app.use("/tenant", TenantRouter.default);
 
 app.use(authenticateTenant);
+app.use("/tenant/me", TenantMeRouter.default);
 app.use("/user", UserRouter.default);
 app.use("/stream", StreamRouter.default);
 app.use("/pay", PaymentRouter.default);
@@ -71,6 +73,10 @@ httpServer.listen(PORT, () => {
   console.log(`Server is listening on port ${PORT}`);
 });
 
+// app.get("/test-auth", authenticateTenant, (req: TenantRequest, res: Response) => {
+//   console.log("Test auth route reached with tenant:", req.tenant);
+//   res.json({ success: true, tenant: req.tenant });
+// });
 // api routes
 // create a new tenant - give api key, access and secret key
 // get all tenants
@@ -89,8 +95,8 @@ httpServer.listen(PORT, () => {
 //   "apiKey": {
 //     "id": "cm9osi037000201uydvtkd17q",
 //     "name": "Default API Key",
-//     "key": "sk_387e8a3efac84f8f7605d189aadb63dc",
-//     "secret": "CPGri+uKDyVxt4L76yIz50PVdSpinI5jSBzjAOaGVnM=",
+//     "key": "sk_5fa927d2ad021016ae36b2656fbf8085",
+//     "secret": "iO24O0xXjuXSsIhfLorPKRS2NvcWjbRswYLcnYAvxk4=",
 //     "createdAt": "2025-04-19T22:28:28.531Z",
 //     "expiresAt": "2026-04-19T22:28:28.529Z"
 //   }

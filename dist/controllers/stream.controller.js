@@ -1,7 +1,7 @@
 import { AccessToken, EgressClient, EncodedFileOutput, StreamOutput, StreamProtocol, } from "livekit-server-sdk";
 import { StreamSessionType, CallType, StreamFundingType } from "@prisma/client";
 import { db } from "../prisma.js";
-import { generateMeetingLink, isValidWalletAddress, roomService, livekitHost, } from "../utils/index.js";
+import { generateMeetingLink, isValidWalletAddress, roomService, livekitHost, getAvatarForUser } from "../utils/index.js";
 /**
  * Helper function to generate a unique stream name
  * @param tenantId - The ID of the tenant for which to generate a unique stream name
@@ -247,6 +247,9 @@ export const createStreamToken = async (req, res) => {
         else if (existingStream.streamSessionType === StreamSessionType.Meeting) {
             userType = "co-host";
         }
+        // else if (existingStream.streamSessionType === StreamSessionType.Livestream) {
+        //   userType = "co-host";
+        // } 
         else {
             userType = "guest";
         }
@@ -302,6 +305,8 @@ export const createStreamToken = async (req, res) => {
                 },
             });
         }
+        // might store avatarUrls in the database
+        const avatarUrl = getAvatarForUser(participant.id);
         // Update stream status if host joins
         if (userType === "host") {
             await db.stream.update({
@@ -321,6 +326,7 @@ export const createStreamToken = async (req, res) => {
                 userName,
                 participantId: participant.id,
                 userType,
+                avatarUrl,
             }),
         });
         accessToken.addGrant({
@@ -848,6 +854,207 @@ export const endStream = async (req, res) => {
         console.error("Error ending stream:", error);
         return res.status(500).json({
             error: "Internal server error",
+        });
+    }
+    finally {
+        await db.$disconnect();
+    }
+};
+/**
+ * Controller for starting a stream to YouTube
+ */
+export const streamToYoutube = async (req, res) => {
+    const { roomName, wallet, youtubeRtmpUrl } = req.body;
+    const tenant = req.tenant;
+    try {
+        // 1. Tenant verification
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        // 2. Input validation
+        if (!roomName || !wallet || typeof wallet !== "string" || !youtubeRtmpUrl) {
+            return res.status(400).json({
+                error: "Missing required fields: room name, wallet, or YouTube RTMP URL",
+            });
+        }
+        if (!isValidWalletAddress(wallet)) {
+            return res.status(400).json({ error: "Invalid wallet address format." });
+        }
+        if (!youtubeRtmpUrl.startsWith('rtmp://')) {
+            return res.status(400).json({
+                error: "Invalid YouTube RTMP URL format. Should start with rtmp://",
+            });
+        }
+        // 3. Verify stream belongs to tenant and include user relationship
+        const stream = await db.stream.findFirst({
+            where: {
+                name: roomName,
+                tenantId: tenant.id,
+            },
+            include: {
+                user: true,
+            },
+        });
+        if (!stream) {
+            return res
+                .status(404)
+                .json({ error: "Stream not found." });
+        }
+        // 4. Check if stream is already being recorded/streamed
+        if (stream.recording) {
+            return res.status(400).json({
+                error: "Stream is already being recorded or streamed",
+                recordId: stream.recordId,
+            });
+        }
+        // 5. Get user and determine user type
+        const user = await db.user.findFirst({
+            where: {
+                walletAddress: wallet,
+                tenantId: tenant.id,
+            },
+        });
+        if (!user) {
+            return res.status(403).json({ error: "User not found" });
+        }
+        let userType;
+        if (user.id === stream.userId) {
+            userType = "host";
+        }
+        else if (stream.streamSessionType === StreamSessionType.Meeting) {
+            userType = "co-host";
+        }
+        else {
+            userType = "guest";
+        }
+        // 6. Verify user has streaming privileges
+        if (userType !== "host") {
+            return res.status(403).json({
+                error: "Only the host can stream to YouTube.",
+            });
+        }
+        // 7. Start streaming to YouTube
+        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || '', process.env.LIVEKIT_API_SECRET || '');
+        // Create output configuration for YouTube
+        const output = {
+            stream: new StreamOutput({
+                protocol: StreamProtocol.RTMP,
+                urls: [youtubeRtmpUrl],
+            }),
+        };
+        // Start room composite egress (streams the room composition to YouTube)
+        const egressInfo = await egressService.startRoomCompositeEgress(roomName, output);
+        if (!egressInfo) {
+            return res
+                .status(500)
+                .json({ error: "Failed to start YouTube stream. Please try again" });
+        }
+        // Update stream record to reflect recording/streaming state
+        await db.stream.update({
+            where: { id: stream.id },
+            data: {
+                recording: true,
+                recordId: egressInfo.egressId,
+            },
+        });
+        res.status(201).json({
+            message: "YouTube streaming started",
+            recordingId: egressInfo.egressId,
+            streamId: stream.id,
+        });
+    }
+    catch (error) {
+        console.error("Error starting YouTube stream:", error);
+        res.status(500).json({
+            error: "Internal server error",
+            details: error instanceof Error ? error.message : String(error),
+        });
+    }
+    finally {
+        await db.$disconnect();
+    }
+};
+/**
+ * Controller for stopping a YouTube stream
+ */
+export const stopYoutubeStream = async (req, res) => {
+    const { recordId, wallet } = req.body;
+    const tenant = req.tenant;
+    try {
+        // 1. Tenant verification
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        // 2. Input validation
+        if (!recordId || !wallet || typeof wallet !== "string") {
+            return res.status(400).json({
+                error: "Missing required fields: recordId and wallet",
+            });
+        }
+        if (!isValidWalletAddress(wallet)) {
+            return res.status(400).json({ error: "Invalid wallet address format." });
+        }
+        // 3. Find the stream with this recording/streaming session
+        const stream = await db.stream.findFirst({
+            where: {
+                recordId,
+                tenantId: tenant.id,
+                recording: true,
+            },
+            include: {
+                user: true,
+            },
+        });
+        if (!stream) {
+            return res.status(404).json({ error: "Active streaming session not found" });
+        }
+        // 4. Verify user permissions
+        const user = await db.user.findFirst({
+            where: {
+                walletAddress: wallet,
+                tenantId: tenant.id,
+            },
+        });
+        if (!user) {
+            return res.status(403).json({ error: "User not found" });
+        }
+        let userType;
+        if (user.id === stream.userId) {
+            userType = "host";
+        }
+        else if (stream.streamSessionType === StreamSessionType.Meeting) {
+            userType = "co-host";
+        }
+        else {
+            userType = "guest";
+        }
+        // 5. Verify user has streaming privileges
+        if (userType !== "host") {
+            return res.status(403).json({
+                error: "Only the host can stop YouTube streaming.",
+            });
+        }
+        // 6. Stop the streaming
+        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || '', process.env.LIVEKIT_API_SECRET || '');
+        await egressService.stopEgress(recordId);
+        // 7. Update stream record
+        await db.stream.update({
+            where: { id: stream.id },
+            data: {
+                recording: false,
+            },
+        });
+        res.status(200).json({
+            message: "YouTube streaming stopped successfully",
+            streamId: stream.id,
+            recordId: recordId,
+        });
+    }
+    catch (error) {
+        console.error("Error stopping YouTube stream:", error);
+        res.status(500).json({
+            error: "Internal server error",
+            details: error instanceof Error ? error.message : String(error),
         });
     }
     finally {

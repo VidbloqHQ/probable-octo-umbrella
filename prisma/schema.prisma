@@ -50,6 +50,9 @@ model Tenant {
   theme             String?       // Theme identifier or name
   primaryColor      String?       // Hex color code
   secondaryColor    String?       // Hex color code
+  accentColor       String?       // Hex color code
+  textPrimaryColor  String?
+  textSecondaryColor String?
   logo              String? 
   name              String?       // Tenant name
   templateId        String?       // Reference to template if you store templates separately

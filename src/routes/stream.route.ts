@@ -4,6 +4,8 @@ import {
   createStreamToken,
   getStream,
   recordStream,
+  stopYoutubeStream,
+  streamToYoutube,
   updateStream,
 } from "../controllers/stream.controller.js";
 
@@ -14,5 +16,7 @@ router.post("/token", createStreamToken);
 router.get("/:streamId", getStream);
 router.post("/record", recordStream);
 router.put("/:streamId", updateStream);
+router.post("/youtube", streamToYoutube);
+router.post("/youtube/stop", stopYoutubeStream);
 
 export default router;
