@@ -33,20 +33,22 @@ async function generateUniqueStreamName(tenantId) {
  * @param tenant - The tenant object
  * @returns An array of enabled stream types
  */
-function getEnabledStreamTypes(tenant) {
+function getEnabledStreamTypes(tenant, defaultTypes = null) {
     const enabledTypes = [];
-    if (tenant.enabledStreamTypes?.enableStream) {
+    // Either use the tenant's enabledStreamTypes or the defaults
+    const effectiveTypes = tenant.enabledStreamTypes || defaultTypes || {
+        enableStream: true,
+        enableMeeting: true,
+        enablePodcast: false
+    };
+    if (effectiveTypes.enableStream) {
         enabledTypes.push(StreamSessionType.Livestream);
     }
-    if (tenant.enabledStreamTypes?.enableMeeting) {
+    if (effectiveTypes.enableMeeting) {
         enabledTypes.push(StreamSessionType.Meeting);
     }
-    if (tenant.enabledStreamTypes?.enablePodcast) {
+    if (effectiveTypes.enablePodcast) {
         enabledTypes.push(StreamSessionType.Podcast);
-    }
-    // If no types are explicitly enabled, return the default
-    if (enabledTypes.length === 0) {
-        enabledTypes.push(tenant.defaultStreamType);
     }
     return enabledTypes;
 }
@@ -77,57 +79,110 @@ export const createStream = async (req, res) => {
         if (!tenantWithDetails) {
             return res.status(404).json({ error: "Tenant configuration not found." });
         }
+        // Define default enabled types based on schema defaults
+        // These will be used when the tenant doesn't have enabledStreamTypes set
+        const defaultEnabledTypes = {
+            enableStream: true, // Default from schema
+            enableMeeting: true, // Default from schema
+            enablePodcast: false, // Default from schema
+        };
+        // Use either the stored enabledStreamTypes or the defaults
+        const effectiveEnabledTypes = tenantWithDetails.enabledStreamTypes || defaultEnabledTypes;
         // Determine stream session type to use
         let resolvedStreamSessionType;
+        // CASE 1: User specified a stream type
         if (streamSessionType) {
-            // User specified a stream type - use it if it's enabled or if no enabledStreamTypes are configured
+            // Type validation - ensure streamSessionType is a valid enum value
+            if (!Object.values(StreamSessionType).includes(streamSessionType)) {
+                return res.status(400).json({
+                    error: "Invalid streamSessionType value",
+                    validTypes: Object.values(StreamSessionType)
+                });
+            }
+            // Check if the requested type is enabled using effective types
+            let isEnabled = false;
+            switch (streamSessionType) {
+                case StreamSessionType.Livestream:
+                    isEnabled = effectiveEnabledTypes.enableStream;
+                    break;
+                case StreamSessionType.Meeting:
+                    isEnabled = effectiveEnabledTypes.enableMeeting;
+                    break;
+                case StreamSessionType.Podcast:
+                    isEnabled = effectiveEnabledTypes.enablePodcast;
+                    break;
+            }
+            if (!isEnabled) {
+                return res.status(403).json({
+                    error: `${streamSessionType} is not enabled for this tenant`,
+                    allowedTypes: getEnabledStreamTypes(tenantWithDetails, defaultEnabledTypes)
+                });
+            }
+            // If we passed the validation, use the requested type
             resolvedStreamSessionType = streamSessionType;
-            // Only check enabledStreamTypes if it exists
-            if (tenantWithDetails.enabledStreamTypes) {
-                const enabledTypes = tenantWithDetails.enabledStreamTypes;
-                // Verify the requested type is enabled
-                const isTypeEnabled = (streamSessionType === StreamSessionType.Livestream && enabledTypes.enableStream) ||
-                    (streamSessionType === StreamSessionType.Meeting && enabledTypes.enableMeeting) ||
-                    (streamSessionType === StreamSessionType.Podcast && enabledTypes.enablePodcast);
-                if (!isTypeEnabled) {
-                    // Type is explicitly disabled, show available options
+        }
+        // CASE 2: Use tenant default
+        else {
+            // Start with the tenant default
+            resolvedStreamSessionType = tenantWithDetails.defaultStreamType;
+            // Check if default type is enabled using effective types
+            let isDefaultEnabled = false;
+            switch (resolvedStreamSessionType) {
+                case StreamSessionType.Livestream:
+                    isDefaultEnabled = effectiveEnabledTypes.enableStream;
+                    break;
+                case StreamSessionType.Meeting:
+                    isDefaultEnabled = effectiveEnabledTypes.enableMeeting;
+                    break;
+                case StreamSessionType.Podcast:
+                    isDefaultEnabled = effectiveEnabledTypes.enablePodcast;
+                    break;
+            }
+            // If the default type is disabled, try to find an enabled type
+            if (!isDefaultEnabled) {
+                if (effectiveEnabledTypes.enableStream) {
+                    resolvedStreamSessionType = StreamSessionType.Livestream;
+                }
+                else if (effectiveEnabledTypes.enableMeeting) {
+                    resolvedStreamSessionType = StreamSessionType.Meeting;
+                }
+                else if (effectiveEnabledTypes.enablePodcast) {
+                    resolvedStreamSessionType = StreamSessionType.Podcast;
+                }
+                else {
+                    // No types are enabled (shouldn't happen with defaults, but just in case)
                     return res.status(403).json({
-                        error: `${streamSessionType} is not enabled for this tenant`,
-                        allowedTypes: getEnabledStreamTypes(tenantWithDetails)
+                        error: "No stream types are enabled for this tenant",
+                        defaultType: tenantWithDetails.defaultStreamType,
+                        enabledTypes: []
                     });
                 }
             }
         }
-        else {
-            // No stream type specified - use tenant default
-            resolvedStreamSessionType = tenantWithDetails.defaultStreamType;
-            // Only check enabledStreamTypes if it exists
-            if (tenantWithDetails.enabledStreamTypes) {
-                const enabledTypes = tenantWithDetails.enabledStreamTypes;
-                // Check if the default type is enabled
-                const isDefaultEnabled = (resolvedStreamSessionType === StreamSessionType.Livestream && enabledTypes.enableStream) ||
-                    (resolvedStreamSessionType === StreamSessionType.Meeting && enabledTypes.enableMeeting) ||
-                    (resolvedStreamSessionType === StreamSessionType.Podcast && enabledTypes.enablePodcast);
-                // If default is not enabled, try to find any enabled type
-                if (!isDefaultEnabled) {
-                    if (enabledTypes.enableStream) {
-                        resolvedStreamSessionType = StreamSessionType.Livestream;
-                    }
-                    else if (enabledTypes.enableMeeting) {
-                        resolvedStreamSessionType = StreamSessionType.Meeting;
-                    }
-                    else if (enabledTypes.enablePodcast) {
-                        resolvedStreamSessionType = StreamSessionType.Podcast;
-                    }
-                    // Even if no types are explicitly enabled, we'll still use the default
-                }
-            }
+        // Final validation check before proceeding
+        let isFinalTypeEnabled = false;
+        switch (resolvedStreamSessionType) {
+            case StreamSessionType.Livestream:
+                isFinalTypeEnabled = effectiveEnabledTypes.enableStream;
+                break;
+            case StreamSessionType.Meeting:
+                isFinalTypeEnabled = effectiveEnabledTypes.enableMeeting;
+                break;
+            case StreamSessionType.Podcast:
+                isFinalTypeEnabled = effectiveEnabledTypes.enablePodcast;
+                break;
+        }
+        if (!isFinalTypeEnabled) {
+            return res.status(403).json({
+                error: `${resolvedStreamSessionType} is not enabled for this tenant`,
+                allowedTypes: getEnabledStreamTypes(tenantWithDetails, defaultEnabledTypes)
+            });
         }
         // Determine funding type to use (no validation needed here)
         let resolvedFundingType = fundingType || tenantWithDetails.defaultFundingType;
         // Validate call type
         let resolvedCallType;
-        switch (callType.toLowerCase()) {
+        switch ((callType || '').toLowerCase()) {
             case "video":
                 resolvedCallType = CallType.Video;
                 break;
@@ -686,6 +741,13 @@ export const updateStream = async (req, res) => {
             if (isHost) {
                 // Stream session type
                 if (streamSessionType !== undefined) {
+                    // Type validation - ensure streamSessionType is a valid enum value
+                    if (!Object.values(StreamSessionType).includes(streamSessionType)) {
+                        return res.status(400).json({
+                            error: "Invalid streamSessionType value",
+                            validTypes: Object.values(StreamSessionType)
+                        });
+                    }
                     // Get tenant with stream type configuration
                     const tenantWithDetails = await db.tenant.findUnique({
                         where: { id: tenant.id },
@@ -694,21 +756,45 @@ export const updateStream = async (req, res) => {
                     if (!tenantWithDetails) {
                         return res.status(400).json({ error: "Tenant configuration not found." });
                     }
-                    // Only verify against enabledStreamTypes if it exists
-                    if (tenantWithDetails.enabledStreamTypes) {
-                        const enabledTypes = tenantWithDetails.enabledStreamTypes;
-                        // Check if the requested type is enabled
-                        const isTypeEnabled = (streamSessionType === StreamSessionType.Livestream && enabledTypes.enableStream) ||
-                            (streamSessionType === StreamSessionType.Meeting && enabledTypes.enableMeeting) ||
-                            (streamSessionType === StreamSessionType.Podcast && enabledTypes.enablePodcast);
-                        if (!isTypeEnabled) {
-                            // Show available types
-                            return res.status(403).json({
-                                error: `${streamSessionType} is not enabled for this tenant`,
-                                allowedTypes: getEnabledStreamTypes(tenantWithDetails)
-                            });
-                        }
+                    // Define default enabled types based on schema defaults
+                    const defaultEnabledTypes = {
+                        enableStream: true, // Default from schema
+                        enableMeeting: true, // Default from schema
+                        enablePodcast: false, // Default from schema
+                    };
+                    // Use either the stored enabledStreamTypes or the defaults
+                    const effectiveEnabledTypes = tenantWithDetails.enabledStreamTypes || defaultEnabledTypes;
+                    // Check if the requested type is enabled
+                    let isEnabled = false;
+                    switch (streamSessionType) {
+                        case StreamSessionType.Livestream:
+                            isEnabled = effectiveEnabledTypes.enableStream;
+                            break;
+                        case StreamSessionType.Meeting:
+                            isEnabled = effectiveEnabledTypes.enableMeeting;
+                            break;
+                        case StreamSessionType.Podcast:
+                            isEnabled = effectiveEnabledTypes.enablePodcast;
+                            break;
                     }
+                    if (!isEnabled) {
+                        // Generate the list of allowed types
+                        const allowedTypes = [];
+                        if (effectiveEnabledTypes.enableStream) {
+                            allowedTypes.push(StreamSessionType.Livestream);
+                        }
+                        if (effectiveEnabledTypes.enableMeeting) {
+                            allowedTypes.push(StreamSessionType.Meeting);
+                        }
+                        if (effectiveEnabledTypes.enablePodcast) {
+                            allowedTypes.push(StreamSessionType.Podcast);
+                        }
+                        return res.status(403).json({
+                            error: `${streamSessionType} is not enabled for this tenant`,
+                            allowedTypes: allowedTypes
+                        });
+                    }
+                    // If validation passes, update the stream session type
                     updateData.streamSessionType = streamSessionType;
                 }
                 // Funding type

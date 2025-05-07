@@ -1,14 +1,16 @@
 import WebSocket from "ws";
+import { ParticipantManager } from "./services/participantManager.js";
 // Room and guest request state storage
 const roomStates = {};
 export const guestRequests = {};
-// Active addons state - added Quiz
+// Active addons state - without Quiz
 const activeAddons = {
     Custom: { type: "Custom", isActive: false },
     "Q&A": { type: "Q&A", isActive: false },
     Poll: { type: "Poll", isActive: false },
-    Quiz: { type: "Quiz", isActive: false }, // Added Quiz addon
+    Quiz: { type: "Quiz", isActive: false },
 };
+export const activeParticipants = {};
 // Keep track of connected clients by room and by identity
 export const clientsByRoom = {};
 export const clientsByIdentity = {};
@@ -23,7 +25,6 @@ const createWebSocketServer = (server) => {
         server,
         path: "/ws",
     });
-    const pendingGuestRequests = {};
     // Set up heartbeat interval to detect disconnected clients
     const heartbeatInterval = setInterval(() => {
         wss.clients.forEach((ws) => {
@@ -57,12 +58,42 @@ const createWebSocketServer = (server) => {
      * @param event Event type
      * @param data Event data
      */
+    // const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
+    //   const message = JSON.stringify({ event, data });
+    //   const clients = clientsByRoom[roomName] || new Set();
+    //   console.log(
+    //     `Broadcasting ${event} to ${clients.size} clients in room ${roomName}`
+    //   );
+    //   if (clients.size === 0) {
+    //     console.log(
+    //       `No clients in room ${roomName}. Event ${event} not delivered.`
+    //     );
+    //     return;
+    //   }
+    //   let sentCount = 0;
+    //   clients.forEach((client) => {
+    //     if (client.readyState === WebSocket.OPEN) {
+    //       client.send(message);
+    //       sentCount++;
+    //     }
+    //   });
+    //   console.log(
+    //     `Successfully sent ${event} to ${sentCount}/${clients.size} clients in room ${roomName}`
+    //   );
+    // };
+    // In websocket.ts, modify the broadcastToRoom function:
     const broadcastToRoom = (roomName, event, data) => {
         const message = JSON.stringify({ event, data });
         const clients = clientsByRoom[roomName] || new Set();
-        console.log(`Broadcasting ${event} to ${clients.size} clients in room ${roomName}`);
+        // Skip logging for high-frequency events
+        const isHighFrequencyEvent = ['ping', 'pong', 'timeSync'].includes(event);
+        if (!isHighFrequencyEvent) {
+            console.log(`Broadcasting ${event} to ${clients.size} clients in room ${roomName}`);
+        }
         if (clients.size === 0) {
-            console.log(`No clients in room ${roomName}. Event ${event} not delivered.`);
+            if (!isHighFrequencyEvent) {
+                console.log(`No clients in room ${roomName}. Event ${event} not delivered.`);
+            }
             return;
         }
         let sentCount = 0;
@@ -72,7 +103,10 @@ const createWebSocketServer = (server) => {
                 sentCount++;
             }
         });
-        console.log(`Successfully sent ${event} to ${sentCount}/${clients.size} clients in room ${roomName}`);
+        // Only log successful sends for non-high-frequency events
+        if (!isHighFrequencyEvent) {
+            console.log(`Successfully sent ${event} to ${sentCount}/${clients.size} clients in room ${roomName}`);
+        }
     };
     /**
      * Sends a message to a specific client by identity
@@ -254,18 +288,25 @@ const createWebSocketServer = (server) => {
                         const { participantId, roomName } = data;
                         console.log(`Processing invitation for ${participantId} in room ${roomName}`);
                         if (guestRequests[roomName]) {
-                            // Remove the request from the request list
-                            guestRequests[roomName] = guestRequests[roomName].filter((req) => req.participantId !== participantId);
-                            console.log(`Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`);
-                            // Broadcast the updated guest request list to all clients in the room
-                            broadcastToRoom(roomName, "guestRequestsUpdate", guestRequests[roomName]);
-                            // Broadcast the invitation event to the room
-                            // Note: This doesn't change permissions - it just notifies clients
-                            // The actual permission change is done through the API endpoint
-                            broadcastToRoom(roomName, "inviteGuest", {
-                                participantId,
-                                roomName,
-                            });
+                            // Find the participant's request
+                            const requestIndex = guestRequests[roomName].findIndex((req) => req.participantId === participantId);
+                            if (requestIndex !== -1) {
+                                // Remove the request from the request list
+                                guestRequests[roomName].splice(requestIndex, 1);
+                                console.log(`Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`);
+                                // Broadcast the updated guest request list to all clients in the room
+                                broadcastToRoom(roomName, "guestRequestsUpdate", guestRequests[roomName]);
+                                // Broadcast the invitation event to the room
+                                // Note: This doesn't change permissions - it just notifies clients
+                                // The actual permission change is done through the API endpoint
+                                broadcastToRoom(roomName, "inviteGuest", {
+                                    participantId,
+                                    roomName,
+                                });
+                            }
+                            else {
+                                console.warn(`Request for ${participantId} not found in room ${roomName}`);
+                            }
                         }
                         else {
                             console.warn(`No guest requests found for room ${roomName}`);
@@ -276,17 +317,23 @@ const createWebSocketServer = (server) => {
                         const { participantId, roomName } = data;
                         console.log(`Processing return to guest for ${participantId} in room ${roomName}`);
                         if (guestRequests[roomName]) {
-                            // Remove the request from the request list
-                            guestRequests[roomName] = guestRequests[roomName].filter((req) => req.participantId !== participantId);
-                            console.log(`Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`);
-                            // Broadcast the updated guest request list to all clients in the room
-                            broadcastToRoom(roomName, "guestRequestsUpdate", guestRequests[roomName]);
-                            // Broadcast the return to guest event to the room
-                            // Like inviteGuest, this just notifies - permissions are changed via API
-                            broadcastToRoom(roomName, "returnToGuest", {
-                                participantId,
-                                roomName,
-                            });
+                            // Find the participant's request
+                            const requestIndex = guestRequests[roomName].findIndex((req) => req.participantId === participantId);
+                            if (requestIndex !== -1) {
+                                // Remove the request from the request list
+                                guestRequests[roomName].splice(requestIndex, 1);
+                                console.log(`Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`);
+                                // Broadcast the updated guest request list to all clients in the room
+                                broadcastToRoom(roomName, "guestRequestsUpdate", guestRequests[roomName]);
+                                // Broadcast the return to guest event to the room
+                                broadcastToRoom(roomName, "returnToGuest", {
+                                    participantId,
+                                    roomName,
+                                });
+                            }
+                            else {
+                                console.warn(`Request for ${participantId} not found in room ${roomName}`);
+                            }
                         }
                         break;
                     }
@@ -337,6 +384,14 @@ const createWebSocketServer = (server) => {
                         });
                         break;
                     }
+                    // In websocket.ts, modify the participantActive handler
+                    case "participantActive": {
+                        const { participantId, roomName, timestamp } = data;
+                        // Use the centralized manager
+                        ParticipantManager.updateParticipantActivity(roomName, participantId);
+                        console.log(`Participant ${participantId} active in room ${roomName}`);
+                        break;
+                    }
                     case "newToken": {
                         const { participantId, token } = data;
                         sendToClient(participantId, "newToken", { token });
@@ -345,28 +400,6 @@ const createWebSocketServer = (server) => {
                     case "pong": {
                         // Handle pong message to keep connection alive
                         extWs.isAlive = true;
-                        break;
-                    }
-                    // Add more event handlers as needed for Quiz addon
-                    case "submitQuizAnswer": {
-                        const { roomName, questionId, participantId, answer } = data;
-                        // Process and broadcast the submitted answer
-                        broadcastToRoom(roomName, "quizAnswerReceived", {
-                            questionId,
-                            participantId,
-                        });
-                        break;
-                    }
-                    case "startQuiz": {
-                        const { roomName, quiz } = data;
-                        // Start the quiz and broadcast to all participants
-                        broadcastToRoom(roomName, "quizStarted", quiz);
-                        break;
-                    }
-                    case "endQuiz": {
-                        const { roomName, results } = data;
-                        // End the quiz and broadcast results
-                        broadcastToRoom(roomName, "quizEnded", results);
                         break;
                     }
                 }

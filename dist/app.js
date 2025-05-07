@@ -3,6 +3,7 @@ import { createServer } from "http";
 import cors from "cors";
 import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, } from "./routes/index.js";
 import { authenticateTenant } from "./middlewares/tenant-auth.middleware.js";
+import { startReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
 const app = express();
 const PORT = 8001;
@@ -33,6 +34,7 @@ app.use((req, res, next) => {
     // console.log(`Request received: ${req.method} ${req.url}`);
     next();
 });
+startReconciliationJob();
 app.use("/tenant", TenantRouter.default);
 app.use(authenticateTenant);
 app.use("/tenant/me", TenantMeRouter.default);

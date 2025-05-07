@@ -1,5 +1,4 @@
 import express from "express";
-
 import {
   submitPollVote,
   getPollResults,
@@ -10,6 +9,6 @@ const router = express.Router();
 
 router.post("/", submitPollVote);
 router.get("/:agendaId", getPollResults);
-router.get("/:agendaId", getUserPollVote);
+router.get("/:agendaId/user-vote", getUserPollVote);
 
 export default router;

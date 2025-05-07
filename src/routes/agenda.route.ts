@@ -11,6 +11,6 @@ const router = express.Router();
 router.post("/:streamId", createAgenda);
 router.get("/:streamId", getStreamAgenda);
 router.put("/:agendaId", updateStreamAgenda);
-router.delete("/:agendaId", deleteAgenda);
+router.delete("/:agendaId/:wallet", deleteAgenda);
 
 export default router;

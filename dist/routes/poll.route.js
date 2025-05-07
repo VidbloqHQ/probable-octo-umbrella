@@ -3,5 +3,5 @@ import { submitPollVote, getPollResults, getUserPollVote } from "../controllers/
 const router = express.Router();
 router.post("/", submitPollVote);
 router.get("/:agendaId", getPollResults);
-router.get("/:agendaId", getUserPollVote);
+router.get("/:agendaId/user-vote", getUserPollVote);
 export default router;

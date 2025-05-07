@@ -9,6 +9,7 @@ import {
 } from "../utils/index.js";
 import { TenantRequest } from "../types/index.js";
 import { clientsByRoom, clientsByIdentity } from "../websocket.js";
+import { ParticipantManager } from "../services/participantManager.js";
 import { wss } from "../app.js";
 
 /**
@@ -62,127 +63,7 @@ export const getStreamParticipants = async (
 /**
  * Controller for updating participant's leftAt time when they leave a stream
  */
-export const updateParticipantLeftTime = async (
-  req: TenantRequest,
-  res: Response
-) => {
-  const { streamId } = req.params;
-  const { wallet, leftAt } = req.body;
-  const tenant = req.tenant;
 
-  try {
-    // 1. Tenant verification
-    if (!tenant) {
-      return res.status(401).json({ error: "Tenant authentication required." });
-    }
-
-    // 2. Input validation
-    if (!streamId || !wallet || !leftAt) {
-      return res
-        .status(400)
-        .json({ error: "Missing required fields: streamId, wallet, leftAt" });
-    }
-
-    if (!isValidWalletAddress(wallet)) {
-      return res.status(400).json({ error: "Invalid wallet address format." });
-    }
-
-    // 3. Find the stream
-    const stream = await db.stream.findFirst({
-      where: {
-        name: streamId,
-        tenantId: tenant.id,
-      },
-      include: { participants: true },
-    });
-
-    if (!stream) {
-      return res
-        .status(404)
-        .json({ error: `Stream with name ${streamId} not found` });
-    }
-
-    // 4. Find the participant
-    const participant = await db.participant.findFirst({
-      where: {
-        streamId: stream.id,
-        walletAddress: wallet,
-        tenantId: tenant.id,
-      },
-    });
-
-    if (!participant) {
-      return res.status(404).json({ error: "Participant not found" });
-    }
-
-    if (participant.leftAt) {
-      return res
-        .status(200)
-        .json({ message: "Participant already marked as left" });
-    }
-
-    // 5. Implement retry mechanism
-    const MAX_RETRIES = 3;
-    let retries = 0;
-    let success = false;
-
-    while (!success && retries < MAX_RETRIES) {
-      try {
-        await db.participant.update({
-          where: { id: participant.id },
-          data: { leftAt: new Date(leftAt) },
-        });
-        console.log(`Successfully updated leftAt for participant ${wallet}`);
-        success = true;
-      } catch (error) {
-        retries++;
-        console.log(`Retrying update (attempt ${retries})...`);
-        await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait 1 second before retrying
-      }
-    }
-
-    if (!success) {
-      return res.status(500).json({
-        error: "Failed to update participant after multiple attempts",
-      });
-    }
-
-    // 6. If the participant is a host, check if it was the last host and potentially end the stream
-    if (participant.userType === "host") {
-      const otherActiveHosts = stream.participants.some(
-        (p) => p.userType === "host" && p.id !== participant.id && !p.leftAt
-      );
-
-      if (!otherActiveHosts) {
-        // This was the last active host
-        const streamEndTime = new Date();
-
-        await db.stream.update({
-          where: { id: stream.id },
-          data: {
-            isLive: false,
-            endedAt: streamEndTime,
-          },
-        });
-
-        // Optionally close the LiveKit room
-        // try {
-        //   await roomService.deleteRoom(streamId);
-        // } catch (roomError) {
-        //   console.error("Error closing LiveKit room:", roomError);
-        //   // Continue even if room deletion fails
-        // }
-      }
-    }
-
-    res.status(200).json({ message: "Participant updated successfully" });
-  } catch (error) {
-    console.error("Error updating participant left time:", error);
-    res.status(500).json({ error: "Internal server error" });
-  } finally {
-    await db.$disconnect();
-  }
-};
 
 /**
  * Controller for updating participant permissions (promote guest to temp-host or demote temp-host to guest)
@@ -501,6 +382,164 @@ export const getParticipantScores = async (
     });
   } catch (error) {
     console.error("Error fetching participant scores:", error);
+    res.status(500).json({ error: "Internal server error" });
+  } finally {
+    await db.$disconnect();
+  }
+};
+
+/**
+ * Controller for handling WebSocket disconnections and updating participant data
+ */
+
+
+/**
+ * Controller for updating participant's leftAt time when they leave a stream
+ */
+export const updateParticipantLeftTime = async (
+  req: TenantRequest,
+  res: Response
+) => {
+  const { streamId } = req.params;
+  // const { wallet, leftAt } = req.body;
+
+  let wallet, leftAt;
+  
+  // Handle both JSON body and FormData from sendBeacon
+  if (req.method === 'POST' && req.query.method === 'PUT') {
+    // This is a sendBeacon request which comes as FormData
+    wallet = req.body.wallet;
+    leftAt = req.body.leftAt;
+  } else {
+    // Regular JSON body
+    ({ wallet, leftAt } = req.body);
+  }
+  
+  const tenant = req.tenant;
+
+  try {
+    // 1. Log everything for debugging
+    console.log(`updateParticipantLeftTime called:`, { 
+      streamId, 
+      wallet, 
+      leftAt, 
+      tenantId: tenant?.id 
+    });
+
+    // 2. Tenant verification
+    if (!tenant) {
+      return res.status(401).json({ error: "Tenant authentication required." });
+    }
+
+    // 3. Input validation
+    if (!streamId || !wallet) {
+      return res
+        .status(400)
+        .json({ error: "Missing required fields: streamId, wallet" });
+    }
+
+    if (!isValidWalletAddress(wallet)) {
+      console.log(`Invalid wallet address: ${wallet}`);
+      return res.status(400).json({ error: "Invalid wallet address format." });
+    }
+
+    // 4. Find the stream
+    const stream = await db.stream.findFirst({
+      where: {
+        name: streamId,
+        tenantId: tenant.id,
+      },
+    });
+
+    if (!stream) {
+      console.log(`Stream not found: ${streamId}`);
+      return res.status(404).json({ error: `Stream not found` });
+    }
+
+    // 5. Find ALL participants for this wallet (there might be duplicates)
+    console.log(`Looking for participant with wallet ${wallet} in stream ${streamId}`);
+    
+    const participants = await db.participant.findMany({
+      where: {
+        streamId: stream.id,
+        walletAddress: wallet,
+        tenantId: tenant.id,
+      },
+    });
+
+    if (participants.length === 0) {
+      console.log(`No participants found for wallet ${wallet}`);
+      return res.status(404).json({ error: "Participant not found" });
+    }
+
+    // 6. Count updates
+    let updateCount = 0;
+
+    // 7. Update ALL matching participants (to handle potential duplicates)
+    for (const participant of participants) {
+      if (!participant.leftAt) {
+        try {
+          await db.participant.update({
+            where: { id: participant.id },
+            data: { leftAt: new Date(leftAt || Date.now()) },
+          });
+          updateCount++;
+          console.log(`Updated leftAt for participant ${participant.id}`);
+        } catch (error) {
+          console.error(`Failed to update participant ${participant.id}:`, error);
+        }
+      } else {
+        console.log(`Participant ${participant.id} already marked as left`);
+      }
+    }
+
+    // 8. Return success
+    return res.status(200).json({ 
+      message: `${updateCount} participants updated successfully`,
+      updatedIds: participants.map(p => p.id)
+    });
+  } catch (error) {
+    console.error("Error updating participant left time:", error);
+    res.status(500).json({ error: "Internal server error" });
+  } finally {
+    await db.$disconnect();
+  }
+};
+
+// Update the handleWebSocketDisconnect function
+export const handleWebSocketDisconnect = async (
+  req: TenantRequest,
+  res: Response
+) => {
+  const { streamId, participantId } = req.params;
+  const tenant = req.tenant;
+
+  try {
+    // 1. Tenant verification
+    if (!tenant) {
+      return res.status(401).json({ error: "Tenant authentication required." });
+    }
+
+    // 2. Input validation
+    if (!streamId || !participantId) {
+      return res
+        .status(400)
+        .json({ error: "Missing required fields: streamId, participantId" });
+    }
+
+    // 3. Use the centralized service to mark participant as left
+    const dbSuccess = await ParticipantManager.markParticipantAsLeft(streamId, null, participantId);
+    
+    // 4. Clean up WebSocket state
+    const wsSuccess = ParticipantManager.cleanupWebSocketState(streamId, participantId);
+
+    if (!dbSuccess && !wsSuccess) {
+      return res.status(404).json({ error: "Participant not found" });
+    }
+
+    res.status(200).json({ message: "Participant disconnect handled successfully" });
+  } catch (error) {
+    console.error("Error handling WebSocket disconnect:", error);
     res.status(500).json({ error: "Internal server error" });
   } finally {
     await db.$disconnect();

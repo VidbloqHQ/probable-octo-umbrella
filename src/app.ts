@@ -13,6 +13,7 @@ import {
   TenantMeRouter,
 } from "./routes/index.js";
 import { authenticateTenant } from "./middlewares/tenant-auth.middleware.js";
+import { startReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
 
 const app = express();
@@ -52,7 +53,7 @@ app.use((req: Request, res: Response, next) => {
   // console.log(`Request received: ${req.method} ${req.url}`);
   next();
 });
-
+startReconciliationJob();
 app.use("/tenant", TenantRouter.default);
 
 app.use(authenticateTenant);

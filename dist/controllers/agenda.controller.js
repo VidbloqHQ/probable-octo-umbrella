@@ -301,7 +301,7 @@ export const getStreamAgenda = async (req, res) => {
  */
 export const updateStreamAgenda = async (req, res) => {
     const { agendaId } = req.params;
-    const { title, description, timeStamp, wallet, ...contentUpdates } = req.body;
+    const { title, description, timeStamp, wallet, action, ...contentUpdates } = req.body;
     const tenant = req.tenant;
     try {
         // 1. Tenant verification
@@ -345,7 +345,24 @@ export const updateStreamAgenda = async (req, res) => {
                 details: `Agenda ${agendaId} not found`
             });
         }
-        // 4. Verify requesting user is authorized
+        // 4. Prevent changing the action type of an existing agenda
+        if (action !== undefined && action !== existingAgenda.action) {
+            return res.status(400).json({
+                error: "Cannot change agenda action type",
+                currentType: existingAgenda.action,
+                requestedType: action
+            });
+        }
+        // 5. Validate that content updates match the agenda type
+        const invalidFieldsForType = getInvalidFieldsForAgendaType(existingAgenda.action, contentUpdates);
+        if (invalidFieldsForType.length > 0) {
+            return res.status(400).json({
+                error: "Content updates do not match agenda type",
+                agendaType: existingAgenda.action,
+                invalidFields: invalidFieldsForType
+            });
+        }
+        // 6. Verify requesting user is authorized
         const requestingUser = await db.user.findFirst({
             where: {
                 walletAddress: wallet,
@@ -356,6 +373,8 @@ export const updateStreamAgenda = async (req, res) => {
             return res.status(403).json({ error: "User not authorized." });
         }
         const isHost = requestingUser.id === existingAgenda.stream.userId;
+        // Additional verification: Ensure the host wallet matches
+        const isHostWallet = existingAgenda.stream.creatorWallet === wallet;
         const isCoHost = await db.participant.findFirst({
             where: {
                 walletAddress: wallet,
@@ -365,13 +384,13 @@ export const updateStreamAgenda = async (req, res) => {
                 leftAt: null
             }
         });
-        if (!isHost && !isCoHost) {
+        if (!isHost && !isHostWallet && !isCoHost) {
             return res.status(403).json({
                 error: "Only hosts and co-hosts can update agendas",
                 requiredRole: "host or co-host"
             });
         }
-        // 5. Check if update is allowed based on stream status
+        // 7. Check if update is allowed based on stream status
         const isLive = existingAgenda.stream.isLive;
         // Prepare base update data
         const updateData = {};
@@ -408,7 +427,7 @@ export const updateStreamAgenda = async (req, res) => {
                 error: "Cannot update timeStamp when stream is live"
             });
         }
-        // Handle content-specific updates
+        // 8. Handle content-specific updates with enhanced validation
         let contentUpdate = {};
         switch (existingAgenda.action) {
             case AgendaAction.Poll:
@@ -454,12 +473,27 @@ export const updateStreamAgenda = async (req, res) => {
                                 error: "Cannot add new questions after quiz responses have been submitted"
                             });
                         }
+                        // Validate all questions before adding them
+                        for (const question of contentUpdates.questions) {
+                            if (!question.questionText || !question.options || !question.correctAnswer) {
+                                return res.status(400).json({
+                                    error: "Each quiz question requires questionText, options, and correctAnswer"
+                                });
+                            }
+                            if (!Array.isArray(question.options) || question.options.length < 2) {
+                                return res.status(400).json({
+                                    error: "Each quiz question requires at least 2 options"
+                                });
+                            }
+                            if (!question.options.includes(question.correctAnswer)) {
+                                return res.status(400).json({
+                                    error: "Correct answer must be one of the options"
+                                });
+                            }
+                        }
                         // Add each new question
                         await db.$transaction(async (tx) => {
                             for (const question of contentUpdates.questions) {
-                                if (!question.questionText || !question.options || !question.correctAnswer) {
-                                    throw new Error("Each quiz question requires questionText, options, and correctAnswer");
-                                }
                                 await tx.quizQuestion.create({
                                     data: {
                                         quizContentId: existingAgenda.quizContent.id,
@@ -485,6 +519,9 @@ export const updateStreamAgenda = async (req, res) => {
             case AgendaAction.Giveaway:
                 // Allow asset type updates even when stream is live
                 if (contentUpdates.assetType) {
+                    if (typeof contentUpdates.assetType !== 'string' || contentUpdates.assetType.trim() === '') {
+                        return res.status(400).json({ error: "Asset type must be a non-empty string" });
+                    }
                     contentUpdate = {
                         assetTransferContent: {
                             update: {
@@ -496,6 +533,9 @@ export const updateStreamAgenda = async (req, res) => {
                 break;
             case AgendaAction.Q_A:
                 if (contentUpdates.topic) {
+                    if (typeof contentUpdates.topic !== 'string') {
+                        return res.status(400).json({ error: "Topic must be a string" });
+                    }
                     contentUpdate = {
                         qaContent: {
                             update: {
@@ -507,6 +547,10 @@ export const updateStreamAgenda = async (req, res) => {
                 break;
             case AgendaAction.Custom:
                 if (contentUpdates.customData) {
+                    // Validate customData is a proper object
+                    if (typeof contentUpdates.customData !== 'object' || contentUpdates.customData === null) {
+                        return res.status(400).json({ error: "customData must be a valid object" });
+                    }
                     contentUpdate = {
                         customContent: {
                             update: {
@@ -559,8 +603,7 @@ export const updateStreamAgenda = async (req, res) => {
  * Controller for deleting a liveStream's agenda
  */
 export const deleteAgenda = async (req, res) => {
-    const { agendaId } = req.params;
-    const { wallet } = req.body;
+    const { agendaId, wallet } = req.params;
     const tenant = req.tenant;
     try {
         // 1. Tenant verification
@@ -643,3 +686,26 @@ export const deleteAgenda = async (req, res) => {
         await db.$disconnect();
     }
 };
+/**
+ * Helper function to validate content updates match the agenda type
+ */
+function getInvalidFieldsForAgendaType(actionType, contentUpdates) {
+    const invalidFields = [];
+    // Define valid fields for each action type
+    const validFields = {
+        [AgendaAction.Poll]: ['options'],
+        [AgendaAction.Quiz]: ['questions'],
+        [AgendaAction.Transaction]: ['assetType'],
+        [AgendaAction.Giveaway]: ['assetType'],
+        [AgendaAction.Q_A]: ['topic'],
+        [AgendaAction.Custom]: ['customData']
+    };
+    // Check for fields that don't belong to this agenda type
+    const contentKeys = Object.keys(contentUpdates).filter(key => key !== 'title' && key !== 'description' && key !== 'timeStamp' && key !== 'wallet');
+    for (const key of contentKeys) {
+        if (!validFields[actionType].includes(key)) {
+            invalidFields.push(key);
+        }
+    }
+    return invalidFields;
+}
