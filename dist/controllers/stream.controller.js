@@ -382,6 +382,7 @@ export const createStreamToken = async (req, res) => {
                 participantId: participant.id,
                 userType,
                 avatarUrl,
+                walletAddress: wallet,
             }),
         });
         accessToken.addGrant({

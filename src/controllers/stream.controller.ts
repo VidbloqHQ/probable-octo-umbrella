@@ -454,6 +454,7 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
           participantId: participant.id,
           userType,
           avatarUrl,
+          walletAddress: wallet,
         }),
       }
     );

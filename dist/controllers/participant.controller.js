@@ -159,6 +159,7 @@ export const updateParticipantPermissions = async (req, res) => {
                     participantId: participant.id,
                     userType: newRole,
                     avatarUrl,
+                    walletAddress: participant.walletAddress,
                 }),
             });
             newAccessToken.addGrant({

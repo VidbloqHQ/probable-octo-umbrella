@@ -208,6 +208,7 @@ export const updateParticipantPermissions = async (
             participantId: participant.id,
             userType: newRole,
             avatarUrl,
+            walletAddress: participant.walletAddress,
           }),
         }
       );
