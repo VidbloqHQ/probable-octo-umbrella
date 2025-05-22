@@ -140,12 +140,12 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
   // Skip logging for high-frequency events
   const isHighFrequencyEvent = ['ping', 'pong', 'timeSync'].includes(event);
   if (!isHighFrequencyEvent) {
-    console.log(`Broadcasting ${event} to ${clients.size} clients in room ${roomName}`);
+    // console.log(`Broadcasting ${event} to ${clients.size} clients in room ${roomName}`);
   }
 
   if (clients.size === 0) {
     if (!isHighFrequencyEvent) {
-      console.log(`No clients in room ${roomName}. Event ${event} not delivered.`);
+      // console.log(`No clients in room ${roomName}. Event ${event} not delivered.`);
     }
     return;
   }
@@ -160,7 +160,7 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
   
   // Only log successful sends for non-high-frequency events
   if (!isHighFrequencyEvent) {
-    console.log(`Successfully sent ${event} to ${sentCount}/${clients.size} clients in room ${roomName}`);
+    // console.log(`Successfully sent ${event} to ${sentCount}/${clients.size} clients in room ${roomName}`);
   }
 };
 
@@ -185,9 +185,9 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
     const { roomName, participantId } = ws;
 
     if (roomName && participantId) {
-      console.log(
-        `Participant ${participantId} disconnected from room ${roomName}`
-      );
+      // console.log(
+      //   `Participant ${participantId} disconnected from room ${roomName}`
+      // );
 
       // Remove client from tracking collections
       if (clientsByRoom[roomName]) {
@@ -213,9 +213,9 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
           guestRequests[roomName] = guestRequests[roomName].filter(
             (req) => req.participantId !== participantId
           );
-          console.log(
-            `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
-          );
+          // console.log(
+          //   `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
+          // );
 
           // Broadcast updated guest requests
           broadcastToRoom(
@@ -299,9 +299,9 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
             clientsByRoom[roomName].add(extWs);
             clientsByIdentity[participantId] = extWs;
 
-            console.log(
-              `Client ${participantId} joined room ${roomName}. Total clients in room: ${clientsByRoom[roomName].size}`
-            );
+            // console.log(
+            //   `Client ${participantId} joined room ${roomName}. Total clients in room: ${clientsByRoom[roomName].size}`
+            // );
 
             // Initialize room state if it doesn't exist
             if (!roomStates[roomName]) {
@@ -338,11 +338,11 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
             // IMPORTANT: Make sure to send current guest requests state to newly joined participant
             // with a small delay to ensure connection is ready
             setTimeout(() => {
-              console.log(
-                `Sending existing ${
-                  guestRequests[roomName]?.length || 0
-                } guest requests to newly joined participant ${participantId}`
-              );
+              // console.log(
+              //   `Sending existing ${
+              //     guestRequests[roomName]?.length || 0
+              //   } guest requests to newly joined participant ${participantId}`
+              // );
               if (extWs.readyState === WebSocket.OPEN) {
                 extWs.send(
                   JSON.stringify({
@@ -360,9 +360,9 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
             const { roomName } = data as { roomName: string };
 
             if (extWs.participantId) {
-              console.log(
-                `Received getGuestRequests from ${extWs.participantId} for room ${roomName}`
-              );
+              // console.log(
+              //   `Received getGuestRequests from ${extWs.participantId} for room ${roomName}`
+              // );
 
               // Send the current guest requests directly to the requesting client
               extWs.send(
@@ -383,12 +383,12 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
               walletAddress: string;
             };
 
-            console.log("Received request to speak:", {
-              participantId,
-              roomName,
-              walletAddress,
-              timestamp: new Date().toISOString(),
-            });
+            // console.log("Received request to speak:", {
+            //   participantId,
+            //   roomName,
+            //   walletAddress,
+            //   timestamp: new Date().toISOString(),
+            // });
 
             const newRequest = { participantId, name, walletAddress };
 
@@ -403,15 +403,15 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
 
             if (!existingRequest) {
               guestRequests[roomName].push(newRequest);
-              console.log(
-                `Added request for ${participantId} in room ${roomName}. Total requests: ${guestRequests[roomName].length}`
-              );
+              // console.log(
+              //   `Added request for ${participantId} in room ${roomName}. Total requests: ${guestRequests[roomName].length}`
+              // );
 
               // Store requests persistently to be able to send them to newly joined clients
               const clientCount = clientsByRoom[roomName]?.size || 0;
-              console.log(
-                `Broadcasting guestRequestsUpdate to ${clientCount} clients in room ${roomName}`
-              );
+              // console.log(
+              //   `Broadcasting guestRequestsUpdate to ${clientCount} clients in room ${roomName}`
+              // );
 
               broadcastToRoom(
                 roomName,
@@ -424,14 +424,14 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
                 !clientsByRoom[roomName] ||
                 clientsByRoom[roomName].size === 0
               ) {
-                console.log(
-                  `Warning: No clients in room ${roomName} to receive guest request updates.`
-                );
+                // console.log(
+                //   `Warning: No clients in room ${roomName} to receive guest request updates.`
+                // );
               }
             } else {
-              console.log(
-                `Request for ${participantId} already exists in room ${roomName}`
-              );
+              // console.log(
+              //   `Request for ${participantId} already exists in room ${roomName}`
+              // );
             }
             break;
           }
@@ -442,9 +442,9 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
               roomName: string;
             };
 
-            console.log(
-              `Processing invitation for ${participantId} in room ${roomName}`
-            );
+            // console.log(
+            //   `Processing invitation for ${participantId} in room ${roomName}`
+            // );
 
             if (guestRequests[roomName]) {
               // Find the participant's request
@@ -456,9 +456,9 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
                 // Remove the request from the request list
                 guestRequests[roomName].splice(requestIndex, 1);
 
-                console.log(
-                  `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
-                );
+                // console.log(
+                //   `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
+                // );
 
                 // Broadcast the updated guest request list to all clients in the room
                 broadcastToRoom(
@@ -475,12 +475,12 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
                   roomName,
                 });
               } else {
-                console.warn(
-                  `Request for ${participantId} not found in room ${roomName}`
-                );
+                // console.warn(
+                //   `Request for ${participantId} not found in room ${roomName}`
+                // );
               }
             } else {
-              console.warn(`No guest requests found for room ${roomName}`);
+              // console.warn(`No guest requests found for room ${roomName}`);
             }
             break;
           }
@@ -491,9 +491,9 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
               roomName: string;
             };
 
-            console.log(
-              `Processing return to guest for ${participantId} in room ${roomName}`
-            );
+            // console.log(
+            //   `Processing return to guest for ${participantId} in room ${roomName}`
+            // );
 
             if (guestRequests[roomName]) {
               // Find the participant's request
@@ -505,9 +505,9 @@ const broadcastToRoom = <T>(roomName: string, event: string, data: T) => {
                 // Remove the request from the request list
                 guestRequests[roomName].splice(requestIndex, 1);
 
-                console.log(
-                  `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
-                );
+                // console.log(
+                //   `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
+                // );
 
                 // Broadcast the updated guest request list to all clients in the room
                 broadcastToRoom(
@@ -611,7 +611,7 @@ case "participantActive": {
 
   // Use the centralized manager
   ParticipantManager.updateParticipantActivity(roomName, participantId);
-  console.log(`Participant ${participantId} active in room ${roomName}`);
+  // console.log(`Participant ${participantId} active in room ${roomName}`);
   break;
 }
           case "newToken": {
@@ -631,7 +631,7 @@ case "participantActive": {
           }
         }
       } catch (error) {
-        console.error("Error handling WebSocket message:", error);
+        // console.error("Error handling WebSocket message:", error);
       }
     });
 

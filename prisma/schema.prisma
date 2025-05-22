@@ -40,6 +40,13 @@ enum StreamFundingType {
   Conditional
 }
 
+enum ProgramStreamStatus {
+  Initialized
+  Active
+  Completed
+  Cancelled
+}
+
 model Tenant {
   id                String        @id @default(cuid())
   creatorWallet     String        @unique
@@ -54,6 +61,7 @@ model Tenant {
   textPrimaryColor  String?
   textSecondaryColor String?
   logo              String? 
+  shortLogo         String? 
   name              String?       // Tenant name
   templateId        String?       // Reference to template if you store templates separately
   rpcEndpoint       String?       // Custom RPC endpoint URL
@@ -72,6 +80,9 @@ model Tenant {
   agendas           Agenda[]
   participants      Participant[]
   apiTokens         ApiToken[]    // For managing multiple API tokens per tenant
+  programStreams    ProgramStream[]
+  streamDonations   StreamDonation[]
+  streamDistributions StreamDistribution[]
 }
 
 // API token model for SDK authentication
@@ -115,6 +126,9 @@ model User {
   transaction   Transaction[]
   
   tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  solanaStreams      ProgramStream[]
+  streamDonations    StreamDonation[]
+  streamDistributions StreamDistribution[]
   
   @@unique([walletAddress, tenantId]) // Wallet addresses must be unique within a tenant
   @@index([tenantId, email])
@@ -154,6 +168,7 @@ model Stream {
   recordLink   String?
   tenantId     String
   isLive       Boolean       @default(false)
+  createdAt   DateTime?
   startedAt    DateTime?
   endedAt      DateTime?
   isPublic     Boolean       @default(true) // true = open to everyone, false = requires permission
@@ -184,12 +199,23 @@ model Transaction {
   signature  String
   createdAt  DateTime @default(now())
   tenantId   String
+
+  transactionType   String?              // 'initialize', 'deposit', 'distribute', etc.
+  solanaStreamId    String?              // Optional reference to SolanaProgramStream
+  donationId        String?              // Optional reference to StreamDonation
+  distributionId    String?              // Optional reference to StreamDistribution
   
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  programStream     ProgramStream?      @relation(fields: [solanaStreamId], references: [id])
+  donation          StreamDonation?      @relation(fields: [donationId], references: [id])
+  distribution      StreamDistribution?  @relation(fields: [distributionId], references: [id])
   
   @@index([tenantId, userId])
+  @@index([transactionType])
 }
+
 
 model Agenda {
   id           String         @id @default(cuid())
@@ -239,7 +265,7 @@ model QuizContent {
   agenda      Agenda       @relation(fields: [agendaId], references: [id], onDelete: Cascade)
 }
 
-// Quiz Questions
+// Quiz Questions keep try of user's response time
 model QuizQuestion {
   id            String     @id @default(cuid())
   quizContentId String
@@ -335,6 +361,7 @@ model Participant {
   userName      String
   walletAddress String
   userType      String
+  avatarUrl     String?
   joinedAt      DateTime   @default(now())
   leftAt        DateTime?
   tenantId      String
@@ -352,3 +379,99 @@ model Participant {
   @@index([tenantId, streamId])
 }
 
+model ProgramStream {
+  id                        String              @id @default(cuid())
+  name                      String
+  streamType                StreamFundingType   // Reuse your existing enum
+  streamPDA                 String
+  streamATA                 String
+  mintAddress               String
+  hostWallet                String
+  status                    ProgramStreamStatus @default(Initialized)
+  isInitialized             Boolean             @default(false)
+  totalDeposited            BigInt              @default(0)
+  totalDistributed          BigInt              @default(0)
+  endTime                   DateTime?
+  createdAt                 DateTime            @default(now())
+  startedAt                 DateTime?
+  endedAt                   DateTime?
+  updatedAt                 DateTime            @updatedAt
+  
+  // Transaction signatures
+  transactionSignature      String?
+  startTransactionSignature String?
+  completeTransactionSignature String?
+  updateTransactionSignature String?
+
+  // Relations
+  tenant                    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId                  String
+  user                      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId                    String
+  
+  // Stream related records
+  donations                 StreamDonation[]
+  distributions             StreamDistribution[]
+  transactions              Transaction[]
+
+  @@unique([name, hostWallet, tenantId])
+  @@index([tenantId, userId])
+  @@index([status])
+}
+
+// Record of donations to a stream
+model StreamDonation {
+  id                     String              @id @default(cuid())
+  amount                 String
+  donorWallet            String
+  donorPDA               String
+  status                 String              @default("pending") // pending, confirmed, failed
+  transactionSignature   String?
+  createdAt              DateTime            @default(now())
+  confirmedAt            DateTime?
+  
+  // Refund tracking
+  refundPending          Boolean             @default(false)
+  refundAmount           String?
+  refundConfirmed        Boolean             @default(false)
+  refundedAt             DateTime?
+  refundInitiator        String?
+  refundTransactionSignature String?
+
+  // Relations
+  stream                 ProgramStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  streamId               String
+  tenant                 Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId               String
+  user                   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId                 String
+  transactions           Transaction[]
+
+  @@index([streamId])
+  @@index([tenantId, userId])
+  @@index([donorWallet])
+}
+
+// Record of distributions from a stream
+model StreamDistribution {
+  id                     String              @id @default(cuid())
+  amount                 String
+  recipientWallet        String
+  status                 String              @default("pending") // pending, confirmed, failed
+  transactionSignature   String?
+  createdAt              DateTime            @default(now())
+  confirmedAt            DateTime?
+
+  // Relations
+  stream                 ProgramStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  streamId               String
+  tenant                 Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId               String
+  user                   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId                 String
+  transactions           Transaction[]
+
+  @@index([streamId])
+  @@index([tenantId, userId])
+  @@index([recipientWallet])
+}
