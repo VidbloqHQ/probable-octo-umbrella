@@ -1,19 +1,6 @@
-// import { Response } from "express";
-// import {
-//   PublicKey,
-//   Transaction,
-//   SystemProgram,
-//   LAMPORTS_PER_SOL,
-// } from "@solana/web3.js";
-// import {
-//   TOKEN_PROGRAM_ID,
-//   createTransferInstruction,
-//   getAssociatedTokenAddress,
-//   createAssociatedTokenAccountInstruction,
-// } from "@solana/spl-token";
-import { PublicKey, Transaction, SystemProgram, } from "@solana/web3.js";
+import { PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, createTransferInstruction, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, } from "@solana/spl-token";
-import { tokenMintAccounts, connection, checkSolBalance } from "../utils/index.js";
+import { tokenMintAccounts, connection, checkSolBalance, } from "../utils/index.js";
 import { db } from "../prisma.js";
 export const createTransaction = async (req, res) => {
     const { senderPublicKey, recipients, tokenName } = req.body;
@@ -59,7 +46,7 @@ export const createTransaction = async (req, res) => {
         const solBalanceCheck = await checkSolBalance(connection, senderPublicKey);
         if (!solBalanceCheck.hasBalance) {
             return res.status(400).json({
-                error: `Insufficient SOL balance for transaction fees. Current balance: ${solBalanceCheck.balance} SOL.`
+                error: `Insufficient SOL balance for transaction fees. Current balance: ${solBalanceCheck.balance} SOL.`,
             });
         }
         const transaction = new Transaction();
@@ -85,7 +72,7 @@ export const createTransaction = async (req, res) => {
                 const solBalanceCheck = await checkSolBalance(connection, senderPublicKey);
                 if (!solBalanceCheck.hasBalance || solBalanceCheck.balance < amount) {
                     return res.status(400).json({
-                        error: `Insufficient SOL balance. Required: ${amount} SOL, Available: ${solBalanceCheck.balance} SOL.`
+                        error: `Insufficient SOL balance. Required: ${amount} SOL, Available: ${solBalanceCheck.balance} SOL.`,
                     });
                 }
                 transaction.add(SystemProgram.transfer({
@@ -115,16 +102,17 @@ export const createTransaction = async (req, res) => {
                     // Since we're creating a new token account, there's no balance yet
                     // We should return an error about insufficient balance
                     return res.status(400).json({
-                        error: `A token account will be created for you, but you need to fund it with ${tokenName.toUpperCase()} before making transfers.`
+                        error: `A token account will be created for you, but you need to fund it with ${tokenName.toUpperCase()} before making transfers.`,
                     });
                 }
                 else {
                     // Check token balance
                     const tokenBalance = await connection.getTokenAccountBalance(senderTokenAccount);
-                    const balance = Number(tokenBalance.value.amount) / Math.pow(10, tokenBalance.value.decimals);
+                    const balance = Number(tokenBalance.value.amount) /
+                        Math.pow(10, tokenBalance.value.decimals);
                     if (balance < amount) {
                         return res.status(400).json({
-                            error: `Insufficient ${tokenName.toUpperCase()} balance. Required: ${amount}, Available: ${balance}.`
+                            error: `Insufficient ${tokenName.toUpperCase()} balance. Required: ${amount}, Available: ${balance}.`,
                         });
                     }
                 }
@@ -140,8 +128,11 @@ export const createTransaction = async (req, res) => {
                     mint // Token mint address
                     ));
                 }
+                const tokenBalance = await connection.getTokenAccountBalance(senderTokenAccount);
+                const decimals = tokenBalance.value.decimals;
+                const transferAmount = Math.floor(amount * Math.pow(10, decimals));
                 // Add transfer instruction
-                transaction.add(createTransferInstruction(senderTokenAccount, recipientTokenAccount, sender, amount, [], TOKEN_PROGRAM_ID));
+                transaction.add(createTransferInstruction(senderTokenAccount, recipientTokenAccount, sender, transferAmount, [], TOKEN_PROGRAM_ID));
             }
         }
         const { blockhash } = await connection.getLatestBlockhash("confirmed");
@@ -197,7 +188,7 @@ export const submitTransaction = async (req, res) => {
             // Wait for confirmation with a timeout
             const confirmation = await Promise.race([
                 connection.confirmTransaction(signature, "confirmed"),
-                new Promise((_, reject) => setTimeout(() => reject(new Error("Confirmation timeout")), 30000))
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Confirmation timeout")), 30000)),
             ]);
             // Update user points (tenant-scoped)
             const updatedUser = await db.user.update({
@@ -241,18 +232,18 @@ export const submitTransaction = async (req, res) => {
             if (errorMessage.includes("Attempt to debit an account but found no record of a prior credit")) {
                 return res.status(400).json({
                     error: "Insufficient funds. The sender account doesn't have enough tokens or SOL.",
-                    logs: errorLogs
+                    logs: errorLogs,
                 });
             }
             if (errorMessage.includes("blockhash not found")) {
                 return res.status(400).json({
                     error: "Transaction expired. Please create a new transaction and try again.",
-                    logs: errorLogs
+                    logs: errorLogs,
                 });
             }
             return res.status(400).json({
                 error: errorMessage,
-                logs: errorLogs
+                logs: errorLogs,
             });
         }
     }
