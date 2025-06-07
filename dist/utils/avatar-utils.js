@@ -9,6 +9,7 @@ const AVATAR_URLS = [
     "https://res.cloudinary.com/adaeze/image/upload/v1745404741/xio2cl8cj8em9cebtyyb.png",
     "https://res.cloudinary.com/adaeze/image/upload/v1745404621/wwouagdzhxne70kkgaxv.png",
     "https://res.cloudinary.com/adaeze/image/upload/v1745404606/dfzeavyyvmooxyys4knz.png",
+    "https://res.cloudinary.com/adaeze/image/upload/v1746917882/ihmztupdw0mgu6ma7v9s.png",
 ];
 // Keep track of assigned avatars in the current session
 const assignedAvatars = new Map(); // Map userId -> avatarUrl

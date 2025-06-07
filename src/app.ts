@@ -11,6 +11,7 @@ import {
   ParticipantRouter,
   QuizRouter,
   TenantMeRouter,
+  ProgramRouter
 } from "./routes/index.js";
 import { authenticateTenant } from "./middlewares/tenant-auth.middleware.js";
 import { startReconciliationJob } from "./services/participantReconciliation.js";
@@ -46,7 +47,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
 // Add body logging middleware for debugging
 app.use((req: Request, res: Response, next) => {
   // console.log(req)
@@ -65,6 +65,8 @@ app.use("/agenda", AgendaRouter.default);
 app.use("/poll", PollRouter.default);
 app.use("/participant", ParticipantRouter.default);
 app.use("/quiz", QuizRouter.default);
+app.use("/program", ProgramRouter.default);
+
 
 app.all("*", (req: Request, res: Response) => {
   res.status(404).json({ error: `Route ${req.originalUrl} not found` });

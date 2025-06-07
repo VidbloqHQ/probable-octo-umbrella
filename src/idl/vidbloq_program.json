@@ -1,0 +1,1146 @@
+{
+  "address": "14SYsuFUHifkTHbgcvrZ4xKMsqeFGCD3rV7qNoZLdoND",
+  "metadata": {
+    "name": "vidbloq_program",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
+  },
+  "instructions": [
+    {
+      "name": "complete_stream",
+      "discriminator": [
+        213,
+        45,
+        84,
+        159,
+        240,
+        6,
+        236,
+        197
+      ],
+      "accounts": [
+        {
+          "name": "host",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "stream"
+          ]
+        },
+        {
+          "name": "stream",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stream.stream_name",
+                "account": "StreamState"
+              },
+              {
+                "kind": "account",
+                "path": "stream.host",
+                "account": "StreamState"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "deposit",
+      "discriminator": [
+        242,
+        35,
+        198,
+        137,
+        82,
+        225,
+        242,
+        182
+      ],
+      "accounts": [
+        {
+          "name": "donor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "stream",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stream.stream_name",
+                "account": "StreamState"
+              },
+              {
+                "kind": "account",
+                "path": "stream.host",
+                "account": "StreamState"
+              }
+            ]
+          }
+        },
+        {
+          "name": "donor_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  111,
+                  110,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stream"
+              },
+              {
+                "kind": "account",
+                "path": "donor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "donor_ata",
+          "writable": true
+        },
+        {
+          "name": "stream_ata",
+          "writable": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "distribute",
+      "discriminator": [
+        191,
+        44,
+        223,
+        207,
+        164,
+        236,
+        126,
+        61
+      ],
+      "accounts": [
+        {
+          "name": "host",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "recipient"
+        },
+        {
+          "name": "mint",
+          "docs": [
+            "VERIFIED MINT: Must match stream.mint"
+          ]
+        },
+        {
+          "name": "stream",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stream.stream_name",
+                "account": "StreamState"
+              },
+              {
+                "kind": "account",
+                "path": "stream.host",
+                "account": "StreamState"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stream_ata",
+          "writable": true
+        },
+        {
+          "name": "recipient_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "recipient"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "host",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "stream",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "stream_name"
+              },
+              {
+                "kind": "account",
+                "path": "host"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "stream_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "stream"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "stream_type",
+          "type": {
+            "defined": {
+              "name": "StreamType"
+            }
+          }
+        },
+        {
+          "name": "end_time",
+          "type": {
+            "option": "i64"
+          }
+        }
+      ]
+    },
+    {
+      "name": "refund",
+      "discriminator": [
+        2,
+        96,
+        183,
+        251,
+        63,
+        208,
+        46,
+        46
+      ],
+      "accounts": [
+        {
+          "name": "donor"
+        },
+        {
+          "name": "initiator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "stream",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stream.stream_name",
+                "account": "StreamState"
+              },
+              {
+                "kind": "account",
+                "path": "stream.host",
+                "account": "StreamState"
+              }
+            ]
+          }
+        },
+        {
+          "name": "donor_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  111,
+                  110,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stream"
+              },
+              {
+                "kind": "account",
+                "path": "donor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "donor_ata",
+          "writable": true
+        },
+        {
+          "name": "stream_ata",
+          "writable": true
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "start_stream",
+      "discriminator": [
+        12,
+        48,
+        99,
+        2,
+        49,
+        101,
+        104,
+        196
+      ],
+      "accounts": [
+        {
+          "name": "host",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "stream"
+          ]
+        },
+        {
+          "name": "stream",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stream.stream_name",
+                "account": "StreamState"
+              },
+              {
+                "kind": "account",
+                "path": "stream.host",
+                "account": "StreamState"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "update_stream",
+      "discriminator": [
+        132,
+        239,
+        118,
+        208,
+        84,
+        153,
+        47,
+        100
+      ],
+      "accounts": [
+        {
+          "name": "host",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "stream"
+          ]
+        },
+        {
+          "name": "stream",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  114,
+                  101,
+                  97,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "stream.stream_name",
+                "account": "StreamState"
+              },
+              {
+                "kind": "account",
+                "path": "host"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_end_time",
+          "type": {
+            "option": "i64"
+          }
+        },
+        {
+          "name": "new_status",
+          "type": {
+            "option": {
+              "defined": {
+                "name": "StreamStatus"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "DonorAccount",
+      "discriminator": [
+        117,
+        7,
+        167,
+        205,
+        254,
+        21,
+        69,
+        6
+      ]
+    },
+    {
+      "name": "StreamState",
+      "discriminator": [
+        7,
+        127,
+        34,
+        194,
+        119,
+        142,
+        214,
+        87
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "DepositMade",
+      "discriminator": [
+        210,
+        201,
+        130,
+        183,
+        244,
+        203,
+        155,
+        199
+      ]
+    },
+    {
+      "name": "FundsDistributed",
+      "discriminator": [
+        246,
+        28,
+        47,
+        10,
+        202,
+        53,
+        3,
+        232
+      ]
+    },
+    {
+      "name": "RefundProcessed",
+      "discriminator": [
+        203,
+        88,
+        236,
+        233,
+        192,
+        178,
+        57,
+        161
+      ]
+    },
+    {
+      "name": "StreamInitialized",
+      "discriminator": [
+        165,
+        148,
+        216,
+        67,
+        105,
+        214,
+        199,
+        173
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "InvalidAmount",
+      "msg": "Amount must be greater than 0"
+    },
+    {
+      "code": 6001,
+      "name": "InsufficientFunds",
+      "msg": "Insufficient funds"
+    },
+    {
+      "code": 6002,
+      "name": "MathOverflow",
+      "msg": "Math overflow error"
+    },
+    {
+      "code": 6003,
+      "name": "StreamNotActive",
+      "msg": "Stream is not active"
+    },
+    {
+      "code": 6004,
+      "name": "StreamStillLocked",
+      "msg": "Stream is still time-locked"
+    },
+    {
+      "code": 6005,
+      "name": "AlreadyRefunded",
+      "msg": "Donor has already been refunded"
+    },
+    {
+      "code": 6006,
+      "name": "InvalidDuration",
+      "msg": "Minimum duration must be greater than 0"
+    },
+    {
+      "code": 6007,
+      "name": "InvalidTime",
+      "msg": "Unlock time must be in the future"
+    },
+    {
+      "code": 6008,
+      "name": "DepositNotAllowed",
+      "msg": "Deposits not allowed in current stream state"
+    },
+    {
+      "code": 6009,
+      "name": "StreamNotStarted",
+      "msg": "Stream has not started yet"
+    },
+    {
+      "code": 6010,
+      "name": "StreamAlreadyStarted",
+      "msg": "Stream has already started"
+    },
+    {
+      "code": 6011,
+      "name": "StreamAlreadyEnded",
+      "msg": "Stream has already ended"
+    },
+    {
+      "code": 6012,
+      "name": "Unauthorized",
+      "msg": "Unauthorized action"
+    },
+    {
+      "code": 6013,
+      "name": "DurationNotMet",
+      "msg": "Duration not met"
+    },
+    {
+      "code": 6014,
+      "name": "AmountNotMet",
+      "msg": "Minimum amount not met"
+    },
+    {
+      "code": 6015,
+      "name": "TimeLocked",
+      "msg": "Stream is time-locked"
+    },
+    {
+      "code": 6016,
+      "name": "NameLengthInvalid",
+      "msg": "Name must be between 4 and 32 characters"
+    }
+  ],
+  "types": [
+    {
+      "name": "DepositMade",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "stream",
+            "type": "pubkey"
+          },
+          {
+            "name": "donor",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DonorAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "stream",
+            "type": "pubkey"
+          },
+          {
+            "name": "donor",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "refunded",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FundsDistributed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "stream",
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RefundProcessed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "stream",
+            "type": "pubkey"
+          },
+          {
+            "name": "donor",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "remaining_balance",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "StreamInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "stream",
+            "type": "pubkey"
+          },
+          {
+            "name": "host",
+            "type": "pubkey"
+          },
+          {
+            "name": "stream_type",
+            "type": {
+              "defined": {
+                "name": "StreamType"
+              }
+            }
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "StreamState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "host",
+            "type": "pubkey"
+          },
+          {
+            "name": "stream_name",
+            "type": "string"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "StreamStatus"
+              }
+            }
+          },
+          {
+            "name": "total_deposited",
+            "type": "u64"
+          },
+          {
+            "name": "total_distributed",
+            "type": "u64"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "start_time",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "end_time",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "stream_type",
+            "type": {
+              "defined": {
+                "name": "StreamType"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "StreamStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Active"
+          },
+          {
+            "name": "Ended"
+          },
+          {
+            "name": "Cancelled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "StreamType",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Prepaid",
+            "fields": [
+              {
+                "name": "min_duration",
+                "type": "u64"
+              }
+            ]
+          },
+          {
+            "name": "Live"
+          },
+          {
+            "name": "Conditional",
+            "fields": [
+              {
+                "name": "min_amount",
+                "type": {
+                  "option": "u64"
+                }
+              },
+              {
+                "name": "unlock_time",
+                "type": {
+                  "option": "i64"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

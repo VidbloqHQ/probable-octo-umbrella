@@ -1,7 +1,7 @@
 import express from "express";
 import { createServer } from "http";
 import cors from "cors";
-import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, } from "./routes/index.js";
+import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter } from "./routes/index.js";
 import { authenticateTenant } from "./middlewares/tenant-auth.middleware.js";
 import { startReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
@@ -45,6 +45,7 @@ app.use("/agenda", AgendaRouter.default);
 app.use("/poll", PollRouter.default);
 app.use("/participant", ParticipantRouter.default);
 app.use("/quiz", QuizRouter.default);
+app.use("/program", ProgramRouter.default);
 app.all("*", (req, res) => {
     res.status(404).json({ error: `Route ${req.originalUrl} not found` });
 });
