@@ -1,5 +1,5 @@
 import { db } from "../prisma.js";
-import { clientsByRoom, clientsByIdentity, activeParticipants } from "../websocket.js";
+import { clientsByRoom, clientsByIdentity, activeParticipants, } from "../websocket.js";
 import WebSocket from "ws";
 /**
  * Service for managing participant state across the application
@@ -145,16 +145,27 @@ export class ParticipantManager {
             return false;
         }
     }
+    // Debounce tracking for activity updates
+    static lastActivityUpdate = {};
     /**
-     * Record participant activity
+     * Record participant activity with debouncing
      * @param streamId Stream identifier
      * @param participantId Participant ID
      */
     static updateParticipantActivity(streamId, participantId) {
+        const key = `${streamId}-${participantId}`;
+        const now = Date.now();
+        // Debounce: Only update if last update was more than 5 seconds ago
+        if (this.lastActivityUpdate[key] && now - this.lastActivityUpdate[key] < 5000) {
+            return; // Skip this update
+        }
         if (!activeParticipants[streamId]) {
             activeParticipants[streamId] = {};
         }
-        activeParticipants[streamId][participantId] = Date.now();
+        activeParticipants[streamId][participantId] = now;
+        this.lastActivityUpdate[key] = now;
+        // Temporary debug log to track activity updates
+        console.log(`Activity recorded for ${participantId} in ${streamId}`);
     }
     /**
      * Check if a participant is still active in a stream
@@ -165,11 +176,20 @@ export class ParticipantManager {
     static isParticipantActive(streamId, participantId) {
         // A participant is considered active if:
         // 1. They have an active WebSocket connection
-        // 2. They've sent a heartbeat recently (last 2 minutes)
+        // 2. They've sent a heartbeat recently (last 5 minutes)
         const hasActiveConnection = Boolean(clientsByIdentity[participantId]);
         const hasRecentHeartbeat = Boolean(activeParticipants[streamId]?.[participantId] &&
-            Date.now() - activeParticipants[streamId][participantId] < 2 * 60 * 1000 // 2 minutes
+            Date.now() - activeParticipants[streamId][participantId] < 5 * 60 * 1000 // 5 minutes
         );
-        return hasActiveConnection && hasRecentHeartbeat;
+        return hasActiveConnection || hasRecentHeartbeat;
+    }
+    /**
+     * Get last activity time for a participant
+     * @param streamId Stream identifier
+     * @param participantId Participant ID
+     * @returns number|null Timestamp of last activity or null
+     */
+    static getLastActivity(streamId, participantId) {
+        return activeParticipants[streamId]?.[participantId] || null;
     }
 }
