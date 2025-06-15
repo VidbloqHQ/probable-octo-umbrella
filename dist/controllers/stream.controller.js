@@ -1,7 +1,7 @@
 import { AccessToken, EgressClient, EncodedFileOutput, StreamOutput, StreamProtocol, } from "livekit-server-sdk";
 import { StreamSessionType, CallType, StreamFundingType } from "@prisma/client";
 import { db } from "../prisma.js";
-import { generateMeetingLink, isValidWalletAddress, roomService, livekitHost, getAvatarForUser } from "../utils/index.js";
+import { generateMeetingLink, isValidWalletAddress, roomService, livekitHost, } from "../utils/index.js";
 /**
  * Helper function to generate a unique stream name
  * @param tenantId - The ID of the tenant for which to generate a unique stream name
@@ -36,10 +36,11 @@ async function generateUniqueStreamName(tenantId) {
 function getEnabledStreamTypes(tenant, defaultTypes = null) {
     const enabledTypes = [];
     // Either use the tenant's enabledStreamTypes or the defaults
-    const effectiveTypes = tenant.enabledStreamTypes || defaultTypes || {
+    const effectiveTypes = tenant.enabledStreamTypes ||
+        defaultTypes || {
         enableStream: true,
         enableMeeting: true,
-        enablePodcast: false
+        enablePodcast: false,
     };
     if (effectiveTypes.enableStream) {
         enabledTypes.push(StreamSessionType.Livestream);
@@ -74,7 +75,7 @@ export const createStream = async (req, res) => {
         // Get tenant with more details
         const tenantWithDetails = await db.tenant.findUnique({
             where: { id: tenant.id },
-            include: { enabledStreamTypes: true }
+            include: { enabledStreamTypes: true },
         });
         if (!tenantWithDetails) {
             return res.status(404).json({ error: "Tenant configuration not found." });
@@ -96,7 +97,7 @@ export const createStream = async (req, res) => {
             if (!Object.values(StreamSessionType).includes(streamSessionType)) {
                 return res.status(400).json({
                     error: "Invalid streamSessionType value",
-                    validTypes: Object.values(StreamSessionType)
+                    validTypes: Object.values(StreamSessionType),
                 });
             }
             // Check if the requested type is enabled using effective types
@@ -115,7 +116,7 @@ export const createStream = async (req, res) => {
             if (!isEnabled) {
                 return res.status(403).json({
                     error: `${streamSessionType} is not enabled for this tenant`,
-                    allowedTypes: getEnabledStreamTypes(tenantWithDetails, defaultEnabledTypes)
+                    allowedTypes: getEnabledStreamTypes(tenantWithDetails, defaultEnabledTypes),
                 });
             }
             // If we passed the validation, use the requested type
@@ -154,7 +155,7 @@ export const createStream = async (req, res) => {
                     return res.status(403).json({
                         error: "No stream types are enabled for this tenant",
                         defaultType: tenantWithDetails.defaultStreamType,
-                        enabledTypes: []
+                        enabledTypes: [],
                     });
                 }
             }
@@ -175,14 +176,14 @@ export const createStream = async (req, res) => {
         if (!isFinalTypeEnabled) {
             return res.status(403).json({
                 error: `${resolvedStreamSessionType} is not enabled for this tenant`,
-                allowedTypes: getEnabledStreamTypes(tenantWithDetails, defaultEnabledTypes)
+                allowedTypes: getEnabledStreamTypes(tenantWithDetails, defaultEnabledTypes),
             });
         }
         // Determine funding type to use (no validation needed here)
         let resolvedFundingType = fundingType || tenantWithDetails.defaultFundingType;
         // Validate call type
         let resolvedCallType;
-        switch ((callType || '').toLowerCase()) {
+        switch ((callType || "").toLowerCase()) {
             case "video":
                 resolvedCallType = CallType.Video;
                 break;
@@ -192,7 +193,7 @@ export const createStream = async (req, res) => {
             default:
                 return res.status(400).json({
                     error: "Invalid callType. Must be 'video' or 'audio'",
-                    allowedValues: Object.values(CallType)
+                    allowedValues: Object.values(CallType),
                 });
         }
         // Date validation (if provided)
@@ -253,7 +254,7 @@ export const createStream = async (req, res) => {
  * Controller for creating access token for stream
  */
 export const createStreamToken = async (req, res) => {
-    const { roomName, userName, wallet } = req.body;
+    const { roomName, userName, wallet, avatarUrl } = req.body;
     const tenant = req.tenant;
     try {
         // Tenant check
@@ -268,6 +269,9 @@ export const createStreamToken = async (req, res) => {
         }
         if (!isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Invalid wallet address format." });
+        }
+        if (avatarUrl && typeof avatarUrl !== "string") {
+            return res.status(400).json({ error: "Avatar URL must be a string." });
         }
         // Find the stream with tenant check
         const existingStream = await db.stream.findFirst({
@@ -304,7 +308,7 @@ export const createStreamToken = async (req, res) => {
         }
         // else if (existingStream.streamSessionType === StreamSessionType.Livestream) {
         //   userType = "co-host";
-        // } 
+        // }
         else {
             userType = "guest";
         }
@@ -342,6 +346,7 @@ export const createStreamToken = async (req, res) => {
                         leftAt: null,
                         userName,
                         userType,
+                        ...(avatarUrl && { avatarUrl }),
                     },
                 });
             }
@@ -357,11 +362,10 @@ export const createStreamToken = async (req, res) => {
                     userType,
                     streamId: existingStream.id,
                     tenantId: tenant.id,
+                    ...(avatarUrl && { avatarUrl }),
                 },
             });
         }
-        // might store avatarUrls in the database
-        const avatarUrl = getAvatarForUser(participant.id);
         // Update stream status if host joins
         if (userType === "host") {
             await db.stream.update({
@@ -375,14 +379,15 @@ export const createStreamToken = async (req, res) => {
         }
         // Generate token
         const accessToken = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, {
-            identity: userName,
+            // identity: userName,
+            identity: participant.id,
             ttl: "60m",
             metadata: JSON.stringify({
                 userName,
                 participantId: participant.id,
                 userType,
-                avatarUrl,
                 walletAddress: wallet,
+                ...(avatarUrl && { avatarUrl }),
             }),
         });
         accessToken.addGrant({
@@ -481,9 +486,7 @@ export const recordStream = async (req, res) => {
             },
         });
         if (!stream) {
-            return res
-                .status(404)
-                .json({ error: "Stream not found." });
+            return res.status(404).json({ error: "Stream not found." });
         }
         // 4. Check if stream is already being recorded
         if (stream.recording) {
@@ -663,7 +666,7 @@ export const stopStreamRecord = async (req, res) => {
  */
 export const updateStream = async (req, res) => {
     const { streamId } = req.params;
-    const { scheduledFor, title, callType, streamSessionType, fundingType, isPublic, wallet } = req.body;
+    const { scheduledFor, title, callType, streamSessionType, fundingType, isPublic, wallet, } = req.body;
     const tenant = req.tenant;
     try {
         // 1. Tenant verification
@@ -674,7 +677,9 @@ export const updateStream = async (req, res) => {
             return res.status(400).json({ error: "Stream name is required." });
         }
         if (!wallet || typeof wallet !== "string") {
-            return res.status(400).json({ error: "Valid wallet address is required." });
+            return res
+                .status(400)
+                .json({ error: "Valid wallet address is required." });
         }
         if (!isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Invalid wallet address format." });
@@ -686,13 +691,13 @@ export const updateStream = async (req, res) => {
                 tenantId: tenant.id,
             },
             include: {
-                user: true
-            }
+                user: true,
+            },
         });
         if (!existingStream) {
             return res.status(404).json({
                 error: "Stream not found or access denied.",
-                details: `Stream with name "${streamId}" not found`
+                details: `Stream with name "${streamId}" not found`,
             });
         }
         // 3. Verify requesting user exists
@@ -713,12 +718,12 @@ export const updateStream = async (req, res) => {
                 streamId: existingStream.id,
                 userType: "co-host",
                 tenantId: tenant.id,
-                leftAt: null
-            }
+                leftAt: null,
+            },
         });
         if (!isHost && !isCoHost) {
             return res.status(403).json({
-                error: "Only hosts and co-hosts can update streams."
+                error: "Only hosts and co-hosts can update streams.",
             });
         }
         // 5. Check if the stream is live
@@ -746,16 +751,18 @@ export const updateStream = async (req, res) => {
                     if (!Object.values(StreamSessionType).includes(streamSessionType)) {
                         return res.status(400).json({
                             error: "Invalid streamSessionType value",
-                            validTypes: Object.values(StreamSessionType)
+                            validTypes: Object.values(StreamSessionType),
                         });
                     }
                     // Get tenant with stream type configuration
                     const tenantWithDetails = await db.tenant.findUnique({
                         where: { id: tenant.id },
-                        include: { enabledStreamTypes: true }
+                        include: { enabledStreamTypes: true },
                     });
                     if (!tenantWithDetails) {
-                        return res.status(400).json({ error: "Tenant configuration not found." });
+                        return res
+                            .status(400)
+                            .json({ error: "Tenant configuration not found." });
                     }
                     // Define default enabled types based on schema defaults
                     const defaultEnabledTypes = {
@@ -792,7 +799,7 @@ export const updateStream = async (req, res) => {
                         }
                         return res.status(403).json({
                             error: `${streamSessionType} is not enabled for this tenant`,
-                            allowedTypes: allowedTypes
+                            allowedTypes: allowedTypes,
                         });
                     }
                     // If validation passes, update the stream session type
@@ -803,14 +810,16 @@ export const updateStream = async (req, res) => {
                     if (!Object.values(StreamFundingType).includes(fundingType)) {
                         return res.status(400).json({
                             error: "Invalid fundingType value.",
-                            validTypes: Object.values(StreamFundingType)
+                            validTypes: Object.values(StreamFundingType),
                         });
                     }
                     updateData.fundingType = fundingType;
                 }
                 // Schedule updates
                 if (scheduledFor !== undefined) {
-                    updateData.scheduledFor = scheduledFor ? new Date(scheduledFor) : null;
+                    updateData.scheduledFor = scheduledFor
+                        ? new Date(scheduledFor)
+                        : null;
                 }
             }
             // Both roles can update callType if stream hasn't started
@@ -818,21 +827,26 @@ export const updateStream = async (req, res) => {
                 if (!Object.values(CallType).includes(callType)) {
                     return res.status(400).json({
                         error: "Invalid callType value.",
-                        validTypes: Object.values(CallType)
+                        validTypes: Object.values(CallType),
                     });
                 }
                 updateData.callType = callType;
             }
         }
-        else if (scheduledFor !== undefined || callType !== undefined || streamSessionType !== undefined || fundingType !== undefined) {
+        else if (scheduledFor !== undefined ||
+            callType !== undefined ||
+            streamSessionType !== undefined ||
+            fundingType !== undefined) {
             return res.status(400).json({
                 error: "Cannot update scheduledFor, callType, streamSessionType, or fundingType after stream has started",
-                currentStatus: "Stream is live"
+                currentStatus: "Stream is live",
             });
         }
         // 7. Validate we have something to update
         if (Object.keys(updateData).length === 0) {
-            return res.status(400).json({ error: "No valid fields provided for update." });
+            return res
+                .status(400)
+                .json({ error: "No valid fields provided for update." });
         }
         // 8. Perform the update using the stream's ID
         const updatedStream = await db.stream.update({
@@ -869,7 +883,9 @@ export const endStream = async (req, res) => {
             return res.status(400).json({ error: "Stream name is required." });
         }
         if (!wallet || typeof wallet !== "string") {
-            return res.status(400).json({ error: "Valid wallet address is required." });
+            return res
+                .status(400)
+                .json({ error: "Valid wallet address is required." });
         }
         if (!isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Invalid wallet address format." });
@@ -879,16 +895,16 @@ export const endStream = async (req, res) => {
             where: {
                 name: streamId,
                 tenantId: tenant.id,
-                isLive: true
+                isLive: true,
             },
             include: {
-                user: true
-            }
+                user: true,
+            },
         });
         if (!existingStream) {
             return res.status(404).json({
                 error: "Active stream not found",
-                details: `Stream with name "${streamId}" not found or is not currently live`
+                details: `Stream with name "${streamId}" not found or is not currently live`,
             });
         }
         // 3. Verify requesting user exists
@@ -905,7 +921,7 @@ export const endStream = async (req, res) => {
         const isHost = requestingUser.id === existingStream.userId;
         if (!isHost) {
             return res.status(403).json({
-                error: "Only the host can end this stream"
+                error: "Only the host can end this stream",
             });
         }
         // 5. Stop any active recordings
@@ -925,16 +941,18 @@ export const endStream = async (req, res) => {
             data: {
                 isLive: false,
                 endedAt: new Date(),
-                recording: false
-            }
+                recording: false,
+            },
         });
         return res.status(200).json({
             message: "Stream ended successfully",
             streamId: endedStream.id,
             streamName: endedStream.name,
-            duration: endedStream.startedAt && endedStream.endedAt ?
-                Math.floor((endedStream.endedAt.getTime() - endedStream.startedAt.getTime()) / 1000) :
-                null
+            duration: endedStream.startedAt && endedStream.endedAt
+                ? Math.floor((endedStream.endedAt.getTime() -
+                    endedStream.startedAt.getTime()) /
+                    1000)
+                : null,
         });
     }
     catch (error) {
@@ -967,7 +985,7 @@ export const streamToYoutube = async (req, res) => {
         if (!isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Invalid wallet address format." });
         }
-        if (!youtubeRtmpUrl.startsWith('rtmp://')) {
+        if (!youtubeRtmpUrl.startsWith("rtmp://")) {
             return res.status(400).json({
                 error: "Invalid YouTube RTMP URL format. Should start with rtmp://",
             });
@@ -983,9 +1001,7 @@ export const streamToYoutube = async (req, res) => {
             },
         });
         if (!stream) {
-            return res
-                .status(404)
-                .json({ error: "Stream not found." });
+            return res.status(404).json({ error: "Stream not found." });
         }
         // 4. Check if stream is already being recorded/streamed
         if (stream.recording) {
@@ -1021,7 +1037,7 @@ export const streamToYoutube = async (req, res) => {
             });
         }
         // 7. Start streaming to YouTube
-        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || '', process.env.LIVEKIT_API_SECRET || '');
+        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || "", process.env.LIVEKIT_API_SECRET || "");
         // Create output configuration for YouTube
         const output = {
             stream: new StreamOutput({
@@ -1093,7 +1109,9 @@ export const stopYoutubeStream = async (req, res) => {
             },
         });
         if (!stream) {
-            return res.status(404).json({ error: "Active streaming session not found" });
+            return res
+                .status(404)
+                .json({ error: "Active streaming session not found" });
         }
         // 4. Verify user permissions
         const user = await db.user.findFirst({
@@ -1122,7 +1140,7 @@ export const stopYoutubeStream = async (req, res) => {
             });
         }
         // 6. Stop the streaming
-        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || '', process.env.LIVEKIT_API_SECRET || '');
+        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || "", process.env.LIVEKIT_API_SECRET || "");
         await egressService.stopEgress(recordId);
         // 7. Update stream record
         await db.stream.update({
