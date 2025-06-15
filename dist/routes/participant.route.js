@@ -1,10 +1,12 @@
 import express from "express";
-import { getStreamParticipants, updateParticipantLeftTime, updateParticipantPermissions, getParticipantScores, handleWebSocketDisconnect } from "../controllers/participant.controller.js";
+import { getStreamParticipants, updateParticipantLeftTime, updateParticipantPermissions, getParticipantScores,
+// handleWebSocketDisconnect
+ } from "../controllers/participant.controller.js";
 const router = express.Router();
 router.get("/:streamId", getStreamParticipants);
 router.put("/:streamId", updateParticipantLeftTime);
 router.post("/:streamId", updateParticipantLeftTime);
-router.post("/update-permission", updateParticipantPermissions);
-router.post('/:streamId/disconnect/:participantId', handleWebSocketDisconnect);
+router.post("/update/permission", updateParticipantPermissions);
+// router.post('/:streamId/disconnect/:participantId', handleWebSocketDisconnect);
 router.get("/scores", getParticipantScores);
 export default router;
