@@ -29,6 +29,7 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(beaconHandler);
+app.options('*', cors(corsOptions));
 // Add body logging middleware for debugging
 app.use((req, res, next) => {
     // console.log(req)
