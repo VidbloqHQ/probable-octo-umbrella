@@ -114,20 +114,24 @@ const createWebSocketServer = (server: HttpServer) => {
   // Check for inactive participants
   const inactivityCheckInterval = setInterval(() => {
     const now = Date.now();
-    
-    Object.entries(participantHeartbeats).forEach(([participantId, lastSeen]) => {
-      if (now - lastSeen > HEARTBEAT_TIMEOUT) {
-        console.log(`Participant ${participantId} is inactive (no heartbeat for ${HEARTBEAT_TIMEOUT}ms)`);
-        
-        // Find the client and handle disconnect if they're truly gone
-        const client = clientsByIdentity[participantId];
-        if (client && client.readyState !== WebSocket.OPEN) {
-          handleDisconnect(client, true); // Force immediate disconnect
+
+    Object.entries(participantHeartbeats).forEach(
+      ([participantId, lastSeen]) => {
+        if (now - lastSeen > HEARTBEAT_TIMEOUT) {
+          console.log(
+            `Participant ${participantId} is inactive (no heartbeat for ${HEARTBEAT_TIMEOUT}ms)`
+          );
+
+          // Find the client and handle disconnect if they're truly gone
+          const client = clientsByIdentity[participantId];
+          if (client && client.readyState !== WebSocket.OPEN) {
+            handleDisconnect(client, true); // Force immediate disconnect
+          }
+
+          delete participantHeartbeats[participantId];
         }
-        
-        delete participantHeartbeats[participantId];
       }
-    });
+    );
   }, 10000); // Check every 10 seconds
 
   wss.on("close", () => {
@@ -158,14 +162,18 @@ const createWebSocketServer = (server: HttpServer) => {
     const clients = clientsByRoom[roomName] || new Set();
 
     // Skip logging for high-frequency events
-    const isHighFrequencyEvent = ['ping', 'pong', 'timeSync'].includes(event);
+    const isHighFrequencyEvent = ["ping", "pong", "timeSync"].includes(event);
     if (!isHighFrequencyEvent) {
-      console.log(`Broadcasting ${event} to ${clients.size} clients in room ${roomName}`);
+      console.log(
+        `Broadcasting ${event} to ${clients.size} clients in room ${roomName}`
+      );
     }
 
     if (clients.size === 0) {
       if (!isHighFrequencyEvent) {
-        console.log(`No clients in room ${roomName}. Event ${event} not delivered.`);
+        console.log(
+          `No clients in room ${roomName}. Event ${event} not delivered.`
+        );
       }
       return;
     }
@@ -177,14 +185,19 @@ const createWebSocketServer = (server: HttpServer) => {
           client.send(message);
           sentCount++;
         } catch (error) {
-          console.error(`Error broadcasting to client in room ${roomName}:`, error);
+          console.error(
+            `Error broadcasting to client in room ${roomName}:`,
+            error
+          );
         }
       }
     });
-    
+
     // Only log successful sends for non-high-frequency events
     if (!isHighFrequencyEvent) {
-      console.log(`Successfully sent ${event} to ${sentCount}/${clients.size} clients in room ${roomName}`);
+      console.log(
+        `Successfully sent ${event} to ${sentCount}/${clients.size} clients in room ${roomName}`
+      );
     }
   };
 
@@ -206,17 +219,24 @@ const createWebSocketServer = (server: HttpServer) => {
    * @param ws WebSocket connection
    * @param immediate If true, skip grace period
    */
-  const handleDisconnect = (ws: ExtendedWebSocket, immediate: boolean = false) => {
+  const handleDisconnect = (
+    ws: ExtendedWebSocket,
+    immediate: boolean = false
+  ) => {
     const { roomName, participantId } = ws;
 
     if (!roomName || !participantId) {
       return;
     }
 
-    console.log(`HandleDisconnect called for ${participantId}, immediate: ${immediate}`);
+    console.log(
+      `HandleDisconnect called for ${participantId}, immediate: ${immediate}`
+    );
 
     const performDisconnect = () => {
-      console.log(`Performing disconnect for ${participantId} from room ${roomName}`);
+      console.log(
+        `Performing disconnect for ${participantId} from room ${roomName}`
+      );
 
       // Clear any pending disconnect timeout
       if (pendingDisconnects[participantId]) {
@@ -249,12 +269,14 @@ const createWebSocketServer = (server: HttpServer) => {
 
         // Remove participant's request from guest requests
         if (guestRequests[roomName]) {
-          const hadRequest = guestRequests[roomName].some(req => req.participantId === participantId);
-          
+          const hadRequest = guestRequests[roomName].some(
+            (req) => req.participantId === participantId
+          );
+
           guestRequests[roomName] = guestRequests[roomName].filter(
             (req) => req.participantId !== participantId
           );
-          
+
           if (hadRequest) {
             console.log(
               `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
@@ -285,7 +307,11 @@ const createWebSocketServer = (server: HttpServer) => {
             );
 
             // Broadcast updated raised hands
-            broadcastToRoom(roomName, "raisedHandsUpdate", raisedHands[roomName]);
+            broadcastToRoom(
+              roomName,
+              "raisedHandsUpdate",
+              raisedHands[roomName]
+            );
           }
         }
 
@@ -311,13 +337,21 @@ const createWebSocketServer = (server: HttpServer) => {
       }
 
       // Add grace period to handle temporary disconnects
-      console.log(`Starting ${DISCONNECT_GRACE_PERIOD}ms grace period for ${participantId}`);
-      
+      console.log(
+        `Starting ${DISCONNECT_GRACE_PERIOD}ms grace period for ${participantId}`
+      );
+
       pendingDisconnects[participantId] = setTimeout(() => {
         // Check if the participant has reconnected
         const currentClient = clientsByIdentity[participantId];
-        if (currentClient && currentClient !== ws && currentClient.readyState === WebSocket.OPEN) {
-          console.log(`Participant ${participantId} reconnected with different connection`);
+        if (
+          currentClient &&
+          currentClient !== ws &&
+          currentClient.readyState === WebSocket.OPEN
+        ) {
+          console.log(
+            `Participant ${participantId} reconnected with different connection`
+          );
           delete pendingDisconnects[participantId];
           return;
         }
@@ -398,15 +432,18 @@ const createWebSocketServer = (server: HttpServer) => {
             // Check if this is a reconnection
             const existingClient = clientsByIdentity[participantId];
             const isReconnection = !!existingClient && existingClient !== extWs;
-            
+
             if (isReconnection) {
               console.log(`Participant ${participantId} is reconnecting`);
-              
+
               // Remove the old connection from room
-              if (existingClient.roomName && clientsByRoom[existingClient.roomName]) {
+              if (
+                existingClient.roomName &&
+                clientsByRoom[existingClient.roomName]
+              ) {
                 clientsByRoom[existingClient.roomName].delete(existingClient);
               }
-              
+
               // Close the old connection
               existingClient.close();
             }
@@ -426,7 +463,11 @@ const createWebSocketServer = (server: HttpServer) => {
             participantHeartbeats[participantId] = Date.now();
 
             console.log(
-              `Client ${participantId} ${isReconnection ? 'reconnected to' : 'joined'} room ${roomName}. Total clients in room: ${clientsByRoom[roomName].size}`
+              `Client ${participantId} ${
+                isReconnection ? "reconnected to" : "joined"
+              } room ${roomName}. Total clients in room: ${
+                clientsByRoom[roomName].size
+              }`
             );
 
             // Initialize room state if it doesn't exist
@@ -445,7 +486,8 @@ const createWebSocketServer = (server: HttpServer) => {
             }
 
             // Check if participant is new to the room
-            const isNewParticipant = !roomStates[roomName].participants.has(participantId);
+            const isNewParticipant =
+              !roomStates[roomName].participants.has(participantId);
 
             // Add participant to room state
             roomStates[roomName].participants.add(participantId);
@@ -466,10 +508,14 @@ const createWebSocketServer = (server: HttpServer) => {
 
             // Broadcast participant joined ONLY if they're truly new to the room
             if (isNewParticipant && !isReconnection) {
-              console.log(`Broadcasting participantJoined for ${participantId}`);
+              console.log(
+                `Broadcasting participantJoined for ${participantId}`
+              );
               broadcastToRoom(roomName, "participantJoined", { participantId });
             } else if (isReconnection) {
-              console.log(`Skipping participantJoined broadcast for reconnection: ${participantId}`);
+              console.log(
+                `Skipping participantJoined broadcast for reconnection: ${participantId}`
+              );
             }
 
             // Send current guest requests state to newly joined participant
@@ -648,7 +694,11 @@ const createWebSocketServer = (server: HttpServer) => {
               );
 
               // Broadcast updated raised hands to all clients in the room
-              broadcastToRoom(roomName, "raisedHandsUpdate", raisedHands[roomName]);
+              broadcastToRoom(
+                roomName,
+                "raisedHandsUpdate",
+                raisedHands[roomName]
+              );
             } else {
               console.log(
                 `Hand already raised for ${participantId} in room ${roomName}`
@@ -670,7 +720,7 @@ const createWebSocketServer = (server: HttpServer) => {
 
             if (raisedHands[roomName]) {
               const initialLength = raisedHands[roomName].length;
-              
+
               // Remove raised hand
               raisedHands[roomName] = raisedHands[roomName].filter(
                 (hand) => hand.participantId !== participantId
@@ -682,7 +732,11 @@ const createWebSocketServer = (server: HttpServer) => {
                 );
 
                 // Broadcast updated raised hands to all clients in the room
-                broadcastToRoom(roomName, "raisedHandsUpdate", raisedHands[roomName]);
+                broadcastToRoom(
+                  roomName,
+                  "raisedHandsUpdate",
+                  raisedHands[roomName]
+                );
               }
             }
             break;
@@ -706,13 +760,66 @@ const createWebSocketServer = (server: HttpServer) => {
               );
 
               // Broadcast updated raised hands
-              broadcastToRoom(roomName, "raisedHandsUpdate", raisedHands[roomName]);
+              broadcastToRoom(
+                roomName,
+                "raisedHandsUpdate",
+                raisedHands[roomName]
+              );
 
               // Send acknowledgment to the specific participant
               sendToClient(participantId, "handAcknowledged", { roomName });
             }
             break;
           }
+
+          // case "inviteGuest": {
+          //   const { participantId, roomName } = data as {
+          //     participantId: string;
+          //     roomName: string;
+          //   };
+
+          //   console.log(
+          //     `Processing invitation for ${participantId} in room ${roomName}`
+          //   );
+
+          //   if (guestRequests[roomName]) {
+          //     // Find the participant's request
+          //     const requestIndex = guestRequests[roomName].findIndex(
+          //       (req) => req.participantId === participantId
+          //     );
+
+          //     if (requestIndex !== -1) {
+          //       // Remove the request from the request list
+          //       guestRequests[roomName].splice(requestIndex, 1);
+
+          //       console.log(
+          //         `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
+          //       );
+
+          //       // Broadcast the updated guest request list to all clients in the room
+          //       broadcastToRoom(
+          //         roomName,
+          //         "guestRequestsUpdate",
+          //         guestRequests[roomName]
+          //       );
+
+          //       // Broadcast the invitation event to the room
+          //       broadcastToRoom(roomName, "inviteGuest", {
+          //         participantId,
+          //         roomName,
+          //       });
+          //     } else {
+          //       console.warn(
+          //         `Request for ${participantId} not found in room ${roomName}`
+          //       );
+          //     }
+          //   } else {
+          //     console.warn(`No guest requests found for room ${roomName}`);
+          //   }
+          //   break;
+          // }
+
+          // Add this to your WebSocket server's message handler in the inviteGuest case
 
           case "inviteGuest": {
             const { participantId, roomName } = data as {
@@ -732,27 +839,44 @@ const createWebSocketServer = (server: HttpServer) => {
 
               if (requestIndex !== -1) {
                 // Remove the request from the request list
-                guestRequests[roomName].splice(requestIndex, 1);
+                const removedRequest = guestRequests[roomName].splice(
+                  requestIndex,
+                  1
+                )[0];
 
                 console.log(
                   `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
                 );
 
-                // Broadcast the updated guest request list to all clients in the room
+                // IMPORTANT: Broadcast the updated guest request list FIRST
                 broadcastToRoom(
                   roomName,
                   "guestRequestsUpdate",
                   guestRequests[roomName]
                 );
 
-                // Broadcast the invitation event to the room
-                broadcastToRoom(roomName, "inviteGuest", {
-                  participantId,
-                  roomName,
-                });
+                // Small delay to ensure the guestRequestsUpdate is processed first
+                setTimeout(() => {
+                  // Then broadcast the invitation event to the room
+                  broadcastToRoom(roomName, "inviteGuest", {
+                    participantId,
+                    roomName,
+                  });
+                }, 100);
+
+                // Log the successful removal for debugging
+                console.log(
+                  `Successfully processed invitation for ${participantId}:`,
+                  {
+                    removedRequest,
+                    remainingRequests: guestRequests[roomName].length,
+                    timestamp: new Date().toISOString(),
+                  }
+                );
               } else {
                 console.warn(
-                  `Request for ${participantId} not found in room ${roomName}`
+                  `Request for ${participantId} not found in room ${roomName}. Current requests:`,
+                  guestRequests[roomName].map((req) => req.participantId)
                 );
               }
             } else {
@@ -760,7 +884,6 @@ const createWebSocketServer = (server: HttpServer) => {
             }
             break;
           }
-
           case "returnToGuest": {
             const { participantId, roomName } = data as {
               participantId: string;
@@ -828,19 +951,27 @@ const createWebSocketServer = (server: HttpServer) => {
 
             // Validate the reaction data
             if (!roomName || !reaction || !sender) {
-              console.error("Invalid reaction data received:", { roomName, reaction, sender });
+              console.error("Invalid reaction data received:", {
+                roomName,
+                reaction,
+                sender,
+              });
               break;
             }
 
             // Check if the sender is actually in the room
             if (extWs.roomName !== roomName) {
-              console.error(`Sender ${extWs.participantId} trying to send reaction to room ${roomName} but is in room ${extWs.roomName}`);
+              console.error(
+                `Sender ${extWs.participantId} trying to send reaction to room ${roomName} but is in room ${extWs.roomName}`
+              );
               break;
             }
 
             // Verify room exists
             if (!clientsByRoom[roomName]) {
-              console.error(`Room ${roomName} does not exist or has no clients`);
+              console.error(
+                `Room ${roomName} does not exist or has no clients`
+              );
               break;
             }
 
@@ -849,57 +980,85 @@ const createWebSocketServer = (server: HttpServer) => {
               reaction,
               sender,
               timestamp: Date.now(),
-              id: `${reaction}-${typeof sender === 'string' ? sender : 'unknown'}-${Date.now()}-${Math.random()}`,
-              roomName // Include roomName in the reaction data
+              id: `${reaction}-${
+                typeof sender === "string" ? sender : "unknown"
+              }-${Date.now()}-${Math.random()}`,
+              roomName, // Include roomName in the reaction data
             };
 
-            console.log(`Broadcasting reaction from ${typeof sender === 'string' ? sender : 'unknown'} in room ${roomName}`);
-            console.log(`Room ${roomName} has ${clientsByRoom[roomName].size} connected clients`);
-            
+            console.log(
+              `Broadcasting reaction from ${
+                typeof sender === "string" ? sender : "unknown"
+              } in room ${roomName}`
+            );
+            console.log(
+              `Room ${roomName} has ${clientsByRoom[roomName].size} connected clients`
+            );
+
             // Get all clients in the room
             const clients = clientsByRoom[roomName];
             let sentCount = 0;
             let failedCount = 0;
             const clientDetails: string[] = [];
-            
+
             clients.forEach((client) => {
-              const clientInfo = `${client.participantId || 'unknown'} (state: ${client.readyState})`;
+              const clientInfo = `${
+                client.participantId || "unknown"
+              } (state: ${client.readyState})`;
               clientDetails.push(clientInfo);
-              
+
               if (client.readyState === WebSocket.OPEN) {
                 try {
-                  client.send(JSON.stringify({
-                    event: "receiveReaction",
-                    data: reactionData
-                  }));
+                  client.send(
+                    JSON.stringify({
+                      event: "receiveReaction",
+                      data: reactionData,
+                    })
+                  );
                   sentCount++;
-                  console.log(`✓ Sent reaction to client: ${client.participantId || 'unknown'}`);
+                  console.log(
+                    `✓ Sent reaction to client: ${
+                      client.participantId || "unknown"
+                    }`
+                  );
                 } catch (error) {
-                  console.error(`✗ Error sending reaction to client ${client.participantId}:`, error);
+                  console.error(
+                    `✗ Error sending reaction to client ${client.participantId}:`,
+                    error
+                  );
                   failedCount++;
                 }
               } else {
-                console.warn(`✗ Client ${client.participantId} in room ${roomName} has readyState: ${client.readyState}`);
+                console.warn(
+                  `✗ Client ${client.participantId} in room ${roomName} has readyState: ${client.readyState}`
+                );
                 failedCount++;
               }
             });
-            
+
             console.log(`Reaction broadcast summary for room ${roomName}:`);
             console.log(`- Total clients: ${clients.size}`);
             console.log(`- Successful sends: ${sentCount}`);
             console.log(`- Failed sends: ${failedCount}`);
-            console.log(`- Client details: ${clientDetails.join(', ')}`);
-            
+            console.log(`- Client details: ${clientDetails.join(", ")}`);
+
             // If no clients received the reaction, log a detailed warning
             if (sentCount === 0) {
-              console.error(`CRITICAL: No clients received the reaction in room ${roomName}!`);
-              console.error(`Room state: ${JSON.stringify({
-                roomExists: !!roomStates[roomName],
-                participantCount: roomStates[roomName]?.participants.size || 0,
-                participants: Array.from(roomStates[roomName]?.participants || [])
-              })}`);
+              console.error(
+                `CRITICAL: No clients received the reaction in room ${roomName}!`
+              );
+              console.error(
+                `Room state: ${JSON.stringify({
+                  roomExists: !!roomStates[roomName],
+                  participantCount:
+                    roomStates[roomName]?.participants.size || 0,
+                  participants: Array.from(
+                    roomStates[roomName]?.participants || []
+                  ),
+                })}`
+              );
             }
-            
+
             break;
           }
 
@@ -959,10 +1118,15 @@ const createWebSocketServer = (server: HttpServer) => {
 
             // Update heartbeat
             participantHeartbeats[participantId] = Date.now();
-            
+
             // Use the centralized manager
-            ParticipantManager.updateParticipantActivity(roomName, participantId);
-            console.log(`Participant ${participantId} active in room ${roomName}`);
+            ParticipantManager.updateParticipantActivity(
+              roomName,
+              participantId
+            );
+            console.log(
+              `Participant ${participantId} active in room ${roomName}`
+            );
             break;
           }
 
