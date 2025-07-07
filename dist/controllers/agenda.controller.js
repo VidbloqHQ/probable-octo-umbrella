@@ -109,6 +109,7 @@ export const createAgenda = async (req, res) => {
                 action: actionEnum,
                 title: agenda.title || null, // Allow null for actions that don't require title
                 description: agenda.description || null,
+                duration: agenda.duration || null,
                 tenantId: tenant.id,
             };
             // Create different content based on action type
@@ -595,9 +596,9 @@ export const updateStreamAgenda = async (req, res) => {
             error: "Internal server error",
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    //  finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for deleting a liveStream's agenda
@@ -681,6 +682,63 @@ export const deleteAgenda = async (req, res) => {
         res.status(500).json({
             error: "Internal server error",
         });
+    }
+    finally {
+        await db.$disconnect();
+    }
+};
+/**
+ * Controller for getting a specific agenda by ID
+ */
+export const getAgenda = async (req, res) => {
+    const { agendaId } = req.params;
+    const tenant = req.tenant;
+    try {
+        // 1. Tenant verification
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        // 2. Input validation
+        if (!agendaId) {
+            return res.status(400).json({ error: "Missing agenda ID" });
+        }
+        // 3. Get agenda with all content types and verify tenant ownership
+        const agenda = await db.agenda.findFirst({
+            where: {
+                id: agendaId,
+                tenantId: tenant.id,
+            },
+            include: {
+                pollContent: true,
+                quizContent: {
+                    include: { questions: true }
+                },
+                assetTransferContent: true,
+                qaContent: true,
+                customContent: true,
+                participantResponses: true,
+                stream: {
+                    select: {
+                        id: true,
+                        name: true,
+                        isLive: true,
+                        userId: true,
+                        creatorWallet: true
+                    }
+                }
+            },
+        });
+        if (!agenda) {
+            return res.status(404).json({
+                error: "Agenda not found",
+                details: `Agenda ${agendaId} not found in your tenant`
+            });
+        }
+        res.status(200).json(agenda);
+    }
+    catch (error) {
+        console.error("Error fetching agenda:", error);
+        res.status(500).json({ error: "Internal server error" });
     }
     finally {
         await db.$disconnect();

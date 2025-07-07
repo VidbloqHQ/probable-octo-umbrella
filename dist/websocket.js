@@ -468,6 +468,47 @@ const createWebSocketServer = (server) => {
                         }
                         break;
                     }
+                    // case "inviteGuest": {
+                    //   const { participantId, roomName } = data as {
+                    //     participantId: string;
+                    //     roomName: string;
+                    //   };
+                    //   console.log(
+                    //     `Processing invitation for ${participantId} in room ${roomName}`
+                    //   );
+                    //   if (guestRequests[roomName]) {
+                    //     // Find the participant's request
+                    //     const requestIndex = guestRequests[roomName].findIndex(
+                    //       (req) => req.participantId === participantId
+                    //     );
+                    //     if (requestIndex !== -1) {
+                    //       // Remove the request from the request list
+                    //       guestRequests[roomName].splice(requestIndex, 1);
+                    //       console.log(
+                    //         `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
+                    //       );
+                    //       // Broadcast the updated guest request list to all clients in the room
+                    //       broadcastToRoom(
+                    //         roomName,
+                    //         "guestRequestsUpdate",
+                    //         guestRequests[roomName]
+                    //       );
+                    //       // Broadcast the invitation event to the room
+                    //       broadcastToRoom(roomName, "inviteGuest", {
+                    //         participantId,
+                    //         roomName,
+                    //       });
+                    //     } else {
+                    //       console.warn(
+                    //         `Request for ${participantId} not found in room ${roomName}`
+                    //       );
+                    //     }
+                    //   } else {
+                    //     console.warn(`No guest requests found for room ${roomName}`);
+                    //   }
+                    //   break;
+                    // }
+                    // Add this to your WebSocket server's message handler in the inviteGuest case
                     case "inviteGuest": {
                         const { participantId, roomName } = data;
                         console.log(`Processing invitation for ${participantId} in room ${roomName}`);
@@ -476,18 +517,27 @@ const createWebSocketServer = (server) => {
                             const requestIndex = guestRequests[roomName].findIndex((req) => req.participantId === participantId);
                             if (requestIndex !== -1) {
                                 // Remove the request from the request list
-                                guestRequests[roomName].splice(requestIndex, 1);
+                                const removedRequest = guestRequests[roomName].splice(requestIndex, 1)[0];
                                 console.log(`Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`);
-                                // Broadcast the updated guest request list to all clients in the room
+                                // IMPORTANT: Broadcast the updated guest request list FIRST
                                 broadcastToRoom(roomName, "guestRequestsUpdate", guestRequests[roomName]);
-                                // Broadcast the invitation event to the room
-                                broadcastToRoom(roomName, "inviteGuest", {
-                                    participantId,
-                                    roomName,
+                                // Small delay to ensure the guestRequestsUpdate is processed first
+                                setTimeout(() => {
+                                    // Then broadcast the invitation event to the room
+                                    broadcastToRoom(roomName, "inviteGuest", {
+                                        participantId,
+                                        roomName,
+                                    });
+                                }, 100);
+                                // Log the successful removal for debugging
+                                console.log(`Successfully processed invitation for ${participantId}:`, {
+                                    removedRequest,
+                                    remainingRequests: guestRequests[roomName].length,
+                                    timestamp: new Date().toISOString()
                                 });
                             }
                             else {
-                                console.warn(`Request for ${participantId} not found in room ${roomName}`);
+                                console.warn(`Request for ${participantId} not found in room ${roomName}. Current requests:`, guestRequests[roomName].map(req => req.participantId));
                             }
                         }
                         else {
@@ -641,8 +691,8 @@ const createWebSocketServer = (server) => {
                         break;
                     }
                     case "newToken": {
-                        const { participantId, token } = data;
-                        sendToClient(participantId, "newToken", { token });
+                        const { participantId, token, newUserType } = data;
+                        sendToClient(participantId, "newToken", { token, newUserType });
                         break;
                     }
                     case "pong": {

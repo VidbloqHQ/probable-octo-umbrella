@@ -155,9 +155,10 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
     res.status(500).json({ 
       error: "Internal server error",
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -215,6 +216,7 @@ export const getQuizQuestions = async (req: TenantRequest, res: Response) => {
       id: agenda.id,
       title: agenda.title,
       description: agenda.description,
+      duration: agenda.duration,
       questions
     });
   } catch (error) {

@@ -137,9 +137,9 @@ export const submitQuizAnswers = async (req, res) => {
             error: "Internal server error",
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for getting quiz questions (including correct answers for hosts)
@@ -190,6 +190,7 @@ export const getQuizQuestions = async (req, res) => {
             id: agenda.id,
             title: agenda.title,
             description: agenda.description,
+            duration: agenda.duration,
             questions
         });
     }

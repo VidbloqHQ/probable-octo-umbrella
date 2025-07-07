@@ -1,7 +1,7 @@
 import { AccessToken } from "livekit-server-sdk";
 import WebSocket from "ws";
 import { db } from "../prisma.js";
-import { isValidWalletAddress, roomService, getAvatarForUser, } from "../utils/index.js";
+import { isValidWalletAddress, roomService, } from "../utils/index.js";
 import { clientsByRoom, clientsByIdentity } from "../websocket.js";
 import { ParticipantManager } from "../services/participantManager.js";
 import { wss } from "../app.js";
@@ -139,7 +139,7 @@ export const updateParticipantPermissions = async (req, res) => {
             data: { userType: newRole },
         });
         // 8. Update LiveKit permissions
-        const avatarUrl = getAvatarForUser(participant.id);
+        const avatarUrl = participant.avatarUrl;
         try {
             const livekitParticipant = await roomService.getParticipant(streamId, participantId);
             if (!livekitParticipant) {
@@ -158,8 +158,8 @@ export const updateParticipantPermissions = async (req, res) => {
                     userName: participant.userName,
                     participantId: participant.id,
                     userType: newRole,
-                    avatarUrl,
                     walletAddress: participant.walletAddress,
+                    ...(avatarUrl && { avatarUrl }),
                 }),
             });
             newAccessToken.addGrant({
@@ -195,7 +195,7 @@ export const updateParticipantPermissions = async (req, res) => {
                 if (clientsByIdentity[participantId]) {
                     const tokenMessage = JSON.stringify({
                         event: "newToken",
-                        data: { token },
+                        data: { token, newUserType: newRole },
                     });
                     console.log(`Sending newToken message to participant ${participantId}`);
                     if (clientsByIdentity[participantId].readyState === WebSocket.OPEN) {
