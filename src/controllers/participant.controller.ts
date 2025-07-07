@@ -5,7 +5,6 @@ import { db } from "../prisma.js";
 import {
   isValidWalletAddress,
   roomService,
-  getAvatarForUser,
 } from "../utils/index.js";
 import { TenantRequest } from "../types/index.js";
 import { clientsByRoom, clientsByIdentity } from "../websocket.js";
@@ -179,7 +178,7 @@ export const updateParticipantPermissions = async (
     });
 
     // 8. Update LiveKit permissions
-    const avatarUrl = getAvatarForUser(participant.id);
+    const avatarUrl = participant.avatarUrl;
     try {
       const livekitParticipant = await roomService.getParticipant(
         streamId,
@@ -207,8 +206,8 @@ export const updateParticipantPermissions = async (
             userName: participant.userName,
             participantId: participant.id,
             userType: newRole,
-            avatarUrl,
             walletAddress: participant.walletAddress,
+            ...(avatarUrl && { avatarUrl }),
           }),
         }
       );
@@ -254,7 +253,7 @@ export const updateParticipantPermissions = async (
         if (clientsByIdentity[participantId]) {
           const tokenMessage = JSON.stringify({
             event: "newToken",
-            data: { token },
+            data: { token, newUserType: newRole },
           });
 
           console.log(

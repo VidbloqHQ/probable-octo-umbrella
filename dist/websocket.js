@@ -641,8 +641,8 @@ const createWebSocketServer = (server) => {
                         break;
                     }
                     case "newToken": {
-                        const { participantId, token } = data;
-                        sendToClient(participantId, "newToken", { token });
+                        const { participantId, token, newUserType } = data;
+                        sendToClient(participantId, "newToken", { token, newUserType });
                         break;
                     }
                     case "pong": {

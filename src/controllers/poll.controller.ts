@@ -134,9 +134,10 @@ export const submitPollVote = async (req: TenantRequest, res: Response) => {
     res.status(500).json({ 
       error: "Internal server error",
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**

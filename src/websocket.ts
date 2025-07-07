@@ -967,12 +967,13 @@ const createWebSocketServer = (server: HttpServer) => {
           }
 
           case "newToken": {
-            const { participantId, token } = data as {
+            const { participantId, token, newUserType } = data as {
               participantId: string;
               token: string;
+              newUserType: "host" | "co-host" | "temp-host" | "guest";
             };
 
-            sendToClient(participantId, "newToken", { token });
+            sendToClient(participantId, "newToken", { token, newUserType });
             break;
           }
 

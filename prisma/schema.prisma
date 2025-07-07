@@ -217,7 +217,7 @@ model Transaction {
 }
 
 
-model Agenda {
+model  Agenda {
   id           String         @id @default(cuid())
   streamId     String
   timeStamp    Int
@@ -225,6 +225,7 @@ model Agenda {
   title        String?        // Title for any agenda item type
   description  String?        // Optional description for any agenda item  
   tenantId     String
+  duration     Int?          // Duration in seconds, optional for some actions
   
   // Relationships
   stream       Stream         @relation(fields: [streamId], references: [id])
