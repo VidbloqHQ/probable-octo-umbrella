@@ -10,7 +10,7 @@ import {
 const router = express.Router();
 
 router.post("/:streamId", createAgenda);
-router.get("/:streamId", getStreamAgenda);
+router.get("/stream/:streamId", getStreamAgenda);
 router.put("/:agendaId", updateStreamAgenda);
 router.get("/:agendaId", getAgenda);
 router.delete("/:agendaId/:wallet", deleteAgenda);

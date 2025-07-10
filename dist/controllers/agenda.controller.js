@@ -245,7 +245,7 @@ export const createAgenda = async (req, res) => {
     }
 };
 /**
- * Controller for getting liveStream's agendas
+ * Controller for getting all liveStream's agendas
  */
 export const getStreamAgenda = async (req, res) => {
     const { streamId } = req.params;
