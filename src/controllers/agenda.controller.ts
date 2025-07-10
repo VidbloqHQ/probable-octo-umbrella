@@ -274,7 +274,7 @@ export const createAgenda = async (req: TenantRequest, res: Response) => {
 };
 
 /**
- * Controller for getting liveStream's agendas
+ * Controller for getting all liveStream's agendas
  */
 export const getStreamAgenda = async (
   req: TenantRequest,
