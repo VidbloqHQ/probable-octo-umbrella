@@ -161,7 +161,6 @@ import { isValidWalletAddress } from "../utils/index.js";
 //   // }
 // };
 
-
 export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
   const { agendaId } = req.params;
   const { wallet, answers, totalScore } = req.body;
@@ -272,34 +271,30 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
       pointsEarned: answer.pointsEarned || 0
     }));
 
-    // 8. Create responses using a transaction with timeout
-    await db.$transaction(async (tx) => {
-      // Create all responses in one operation
-      await tx.quizResponse.createMany({
-        data: quizResponseData
-      });
-      
-      // Create a participant response record
-      await tx.participantResponse.create({
-        data: {
-          agendaId: agenda.id,
-          participantId: participant.id,
-          responseType: "quiz_submission"
-        }
-      });
-      
-      // Update participant's total points
-      await tx.participant.update({
-        where: { id: participant.id },
-        data: { 
-          totalPoints: { increment: totalScore }
-        }
-      });
-    }, {
-      timeout: 10000, // 10 second timeout
-      maxWait: 5000,  // 5 second max wait
+    // 8. Create responses without transaction
+    console.log('Creating quiz responses...');
+    await db.quizResponse.createMany({
+      data: quizResponseData
+    });
+    
+    console.log('Creating participant response...');
+    await db.participantResponse.create({
+      data: {
+        agendaId: agenda.id,
+        participantId: participant.id,
+        responseType: "quiz_submission"
+      }
+    });
+    
+    console.log('Updating participant points...');
+    await db.participant.update({
+      where: { id: participant.id },
+      data: { 
+        totalPoints: { increment: totalScore }
+      }
     });
 
+    console.log('Quiz submission completed successfully');
     res.status(201).json({
       message: "Quiz answers submitted successfully",
       totalScore,
@@ -309,11 +304,20 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
     console.error("Error submitting quiz answers:", error);
     
     // More specific error handling
-    if ((error as any)?.code === 'P2028') {
-      return res.status(408).json({ 
-        error: "Request timeout - please try again",
-        details: "The operation took too long to complete"
-      });
+    if (typeof error === "object" && error !== null && "code" in error) {
+      if ((error as { code: string }).code === 'P2028') {
+        return res.status(408).json({ 
+          error: "Request timeout - please try again",
+          details: "The operation took too long to complete"
+        });
+      }
+      
+      if ((error as { code: string }).code === 'P2002') {
+        return res.status(400).json({ 
+          error: "Duplicate submission detected",
+          details: "This quiz has already been submitted"
+        });
+      }
     }
     
     res.status(500).json({ 
@@ -321,6 +325,7 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
     });
   }
 };
+
 /**
  * Controller for getting quiz questions (including correct answers for hosts)
  */
