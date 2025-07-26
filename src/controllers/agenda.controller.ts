@@ -342,7 +342,7 @@ export const updateStreamAgenda = async (
   res: Response
 ) => {
   const { agendaId } = req.params;
-  const { title, description, timeStamp, wallet, action, ...contentUpdates } = req.body;
+  const { title, description, timeStamp, wallet, action, isCompleted, ...contentUpdates } = req.body;
   const tenant = req.tenant;
 
   try {
@@ -468,6 +468,16 @@ export const updateStreamAgenda = async (
     
     if (description !== undefined) {
       updateData.description = description;
+    }
+
+    // Handle isCompleted field
+    if (isCompleted !== undefined) {
+      if (typeof isCompleted !== 'boolean') {
+        return res.status(400).json({ 
+          error: "isCompleted must be a boolean value"
+        });
+      }
+      updateData.isCompleted = isCompleted;
     }
     
     // Fields that can only be updated if stream is not live
@@ -678,6 +688,348 @@ export const updateStreamAgenda = async (
   //   await db.$disconnect();
   // }
 };
+
+// export const updateStreamAgenda = async (
+//   req: TenantRequest,
+//   res: Response
+// ) => {
+//   const { agendaId } = req.params;
+//   const { title, description, timeStamp, wallet, action, ...contentUpdates } = req.body;
+//   const tenant = req.tenant;
+
+//   try {
+//     // 1. Tenant verification
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });
+//     }
+
+//     // 2. Input validation
+//     if (!agendaId) {
+//       return res.status(400).json({ error: "Missing agenda ID" });
+//     }
+
+//     if (!wallet || typeof wallet !== "string") {
+//       return res.status(400).json({ error: "Valid wallet address is required." });
+//     }
+
+//     if (!isValidWalletAddress(wallet)) {
+//       return res.status(400).json({ error: "Invalid wallet address format." });
+//     }
+
+//     // 3. Get agenda with all required relations
+//     const existingAgenda = await db.agenda.findFirst({
+//       where: {
+//         id: agendaId,
+//         tenantId: tenant.id,
+//       },
+//       include: {
+//         stream: {
+//           include: {
+//             user: true
+//           }
+//         },
+//         pollContent: true,
+//         quizContent: {
+//           include: { questions: true }
+//         },
+//         assetTransferContent: true,
+//         qaContent: true,
+//         customContent: true
+//       }
+//     });
+
+//     if (!existingAgenda) {
+//       return res.status(404).json({ 
+//         error: "Agenda not found",
+//         details: `Agenda ${agendaId} not found`
+//       });
+//     }
+
+//     // 4. Prevent changing the action type of an existing agenda
+//     if (action !== undefined && action !== existingAgenda.action) {
+//       return res.status(400).json({ 
+//         error: "Cannot change agenda action type", 
+//         currentType: existingAgenda.action,
+//         requestedType: action
+//       });
+//     }
+
+//     // 5. Validate that content updates match the agenda type
+//     const invalidFieldsForType = getInvalidFieldsForAgendaType(existingAgenda.action, contentUpdates);
+//     if (invalidFieldsForType.length > 0) {
+//       return res.status(400).json({
+//         error: "Content updates do not match agenda type",
+//         agendaType: existingAgenda.action,
+//         invalidFields: invalidFieldsForType
+//       });
+//     }
+
+//     // 6. Verify requesting user is authorized
+//     const requestingUser = await db.user.findFirst({
+//       where: {
+//         walletAddress: wallet,
+//         tenantId: tenant.id,
+//       },
+//     });
+
+//     if (!requestingUser) {
+//       return res.status(403).json({ error: "User not authorized." });
+//     }
+
+//     const isHost = requestingUser.id === existingAgenda.stream.userId;
+    
+//     // Additional verification: Ensure the host wallet matches
+//     const isHostWallet = existingAgenda.stream.creatorWallet === wallet;
+//     const isCoHost = await db.participant.findFirst({
+//       where: {
+//         walletAddress: wallet,
+//         streamId: existingAgenda.stream.id,
+//         userType: "co-host",
+//         tenantId: tenant.id,
+//         leftAt: null
+//       }
+//     });
+
+//     if (!isHost && !isHostWallet && !isCoHost) {
+//       return res.status(403).json({ 
+//         error: "Only hosts and co-hosts can update agendas",
+//         requiredRole: "host or co-host"
+//       });
+//     }
+
+//     // 7. Check if update is allowed based on stream status
+//     const isLive = existingAgenda.stream.isLive;
+    
+//     // Prepare base update data
+//     const updateData: any = {};
+    
+//     // Base agenda fields that can always be updated
+//     if (title !== undefined) {
+//       // Title validation based on action type
+//       if ((existingAgenda.action === AgendaAction.Poll || 
+//            existingAgenda.action === AgendaAction.Q_A ||
+//            existingAgenda.action === AgendaAction.Quiz || 
+//            existingAgenda.action === AgendaAction.Custom) && 
+//           (!title || typeof title !== 'string')) {
+//         return res.status(400).json({ 
+//           error: `Title is required for ${existingAgenda.action} agenda type`
+//         });
+//       }
+//       updateData.title = title;
+//     }
+    
+//     if (description !== undefined) {
+//       updateData.description = description;
+//     }
+    
+//     // Fields that can only be updated if stream is not live
+//     if (!isLive) {
+//       if (timeStamp !== undefined) {
+//         if (typeof timeStamp !== 'number' || timeStamp < 0) {
+//           return res.status(400).json({ 
+//             error: "Invalid timeStamp (must be positive number)"
+//           });
+//         }
+//         updateData.timeStamp = timeStamp;
+//       }
+//     } else if (timeStamp !== undefined) {
+//       return res.status(400).json({ 
+//         error: "Cannot update timeStamp when stream is live" 
+//       });
+//     }
+
+//     // 8. Handle content-specific updates with enhanced validation
+//     let contentUpdate: any = {};
+    
+//     switch (existingAgenda.action) {
+//       case AgendaAction.Poll:
+//         if (contentUpdates.options) {
+//           if (!Array.isArray(contentUpdates.options) || contentUpdates.options.length < 2) {
+//             return res.status(400).json({ error: "Poll requires at least 2 options" });
+//           }
+          
+//           // Only allow updating options if no votes have been cast yet
+//           if (existingAgenda.pollContent && existingAgenda.pollContent.totalVotes > 0) {
+//             return res.status(400).json({ 
+//               error: "Cannot update poll options after voting has started" 
+//             });
+//           }
+          
+//           contentUpdate = {
+//             pollContent: {
+//               update: {
+//                 options: contentUpdates.options
+//               }
+//             }
+//           };
+//         }
+//         break;
+        
+//       case AgendaAction.Quiz:
+//         // For quiz updates, add questions instead of replacing them
+//         if (contentUpdates.questions && Array.isArray(contentUpdates.questions)) {
+//           try {
+//             // Get quiz content
+//             if (!existingAgenda.quizContent) {
+//               return res.status(404).json({ error: "Quiz content not found" });
+//             }
+            
+//             // Check if there are already quiz responses
+//             const hasResponses = await db.quizResponse.findFirst({
+//               where: {
+//                 question: {
+//                   quizContent: {
+//                     agendaId
+//                   }
+//                 }
+//               }
+//             });
+            
+//             if (hasResponses) {
+//               return res.status(400).json({ 
+//                 error: "Cannot add new questions after quiz responses have been submitted" 
+//               });
+//             }
+            
+//             // Validate all questions before adding them
+//             for (const question of contentUpdates.questions) {
+//               if (!question.questionText || !question.options || !question.correctAnswer) {
+//                 return res.status(400).json({ 
+//                   error: "Each quiz question requires questionText, options, and correctAnswer"
+//                 });
+//               }
+              
+//               if (!Array.isArray(question.options) || question.options.length < 2) {
+//                 return res.status(400).json({ 
+//                   error: "Each quiz question requires at least 2 options"
+//                 });
+//               }
+              
+//               if (!question.options.includes(question.correctAnswer)) {
+//                 return res.status(400).json({ 
+//                   error: "Correct answer must be one of the options"
+//                 });
+//               }
+//             }
+            
+//             // Add each new question
+//             await db.$transaction(async (tx) => {
+//               for (const question of contentUpdates.questions) {
+//                 await tx.quizQuestion.create({
+//                   data: {
+//                     quizContentId: existingAgenda.quizContent!.id,
+//                     questionText: question.questionText,
+//                     options: question.options,
+//                     correctAnswer: question.correctAnswer,
+//                     isMultiChoice: question.isMultiChoice ?? true,
+//                     points: question.points ?? 1
+//                   }
+//                 });
+//               }
+//             });
+//           } catch (error) {
+//             if (error instanceof Error) {
+//               return res.status(400).json({ error: error.message });
+//             }
+//             throw error;
+//           }
+//         }
+//         break;
+        
+//       case AgendaAction.Transaction:
+//       case AgendaAction.Giveaway:
+//         // Allow asset type updates even when stream is live
+//         if (contentUpdates.assetType) {
+//           if (typeof contentUpdates.assetType !== 'string' || contentUpdates.assetType.trim() === '') {
+//             return res.status(400).json({ error: "Asset type must be a non-empty string" });
+//           }
+          
+//           contentUpdate = {
+//             assetTransferContent: {
+//               update: {
+//                 assetType: contentUpdates.assetType
+//               }
+//             }
+//           };
+//         }
+//         break;
+        
+//       case AgendaAction.Q_A:
+//         if (contentUpdates.topic) {
+//           if (typeof contentUpdates.topic !== 'string') {
+//             return res.status(400).json({ error: "Topic must be a string" });
+//           }
+          
+//           contentUpdate = {
+//             qaContent: {
+//               update: {
+//                 topic: contentUpdates.topic
+//               }
+//             }
+//           };
+//         }
+//         break;
+        
+//       case AgendaAction.Custom:
+//         if (contentUpdates.customData) {
+//           // Validate customData is a proper object
+//           if (typeof contentUpdates.customData !== 'object' || contentUpdates.customData === null) {
+//             return res.status(400).json({ error: "customData must be a valid object" });
+//           }
+          
+//           contentUpdate = {
+//             customContent: {
+//               update: {
+//                 customData: contentUpdates.customData
+//               }
+//             }
+//           };
+//         }
+//         break;
+//     }
+    
+//     // Merge content update with base update
+//     const finalUpdate = { ...updateData, ...contentUpdate };
+    
+//     // Check if we have anything to update
+//     if (Object.keys(finalUpdate).length === 0) {
+//       return res.status(400).json({ error: "No valid update fields provided" });
+//     }
+
+//     // Perform the update
+//     const updatedAgenda = await db.agenda.update({
+//       where: { id: agendaId },
+//       data: finalUpdate,
+//       include: {
+//         pollContent: true,
+//         quizContent: {
+//           include: { questions: true }
+//         },
+//         assetTransferContent: true,
+//         qaContent: true,
+//         customContent: true
+//       }
+//     });
+
+//     res.status(200).json(updatedAgenda);
+//   } catch (error) {
+//     console.error("Error updating agenda:", error);
+    
+//     // Handle specific transaction errors
+//     if (error instanceof Error) {
+//       return res.status(400).json({ 
+//         error: error.message 
+//       });
+//     }
+    
+//     res.status(500).json({ 
+//       error: "Internal server error",
+//     });
+//   }
+//   //  finally {
+//   //   await db.$disconnect();
+//   // }
+// };
 
 /**
  * Controller for deleting a liveStream's agenda
