@@ -23,44 +23,46 @@ const httpServer = createServer(app);
 
 export const wss = createSocketServer(httpServer);
 
-// IMPORTANT: Set up CORS BEFORE any other middleware
-app.use((req: Request, res: Response, next) => {
-  const origin = req.headers.origin;
-  
-  // Set CORS headers for all requests
-  res.header('Access-Control-Allow-Origin', origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,PATCH,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type,x-api-key,x-api-secret,Authorization,Origin,X-Requested-With,Accept');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Max-Age', '86400');
-  
-  // Handle preflight OPTIONS requests immediately
-  if (req.method === 'OPTIONS') {
-    console.log(`Handling OPTIONS request for: ${req.url}`);
-    return res.sendStatus(200);
-  }
-  
-  next();
-});
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use(beaconHandler);
+const corsOptions = {
+  origin: function (
+    origin: string | undefined,
+    callback: (err: Error | null, allow?: boolean) => void
+  ) {
+    // Always allow preflight requests from any origin
+    // The actual API requests will be filtered by the tenant auth middleware
+    callback(null, true);
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+  allowedHeaders: [
+    "Content-Type",
+    "x-api-key",
+    "x-api-secret",
+    "Authorization",
+  ],
+  credentials: true,
+  maxAge: 86400, // Cache preflight response for 24 hours
+};
 
+app.use(cors(corsOptions));
+
+
+app.use(beaconHandler);
+app.options('*', cors(corsOptions));
 // Add body logging middleware for debugging
 app.use((req: Request, res: Response, next) => {
-  console.log(`${req.method} ${req.url} - Origin: ${req.headers.origin}`);
+  // console.log(req)
+  // console.log(`Request received: ${req.method} ${req.url}`);
   next();
 });
 
 // Start the enhanced reconciliation job
 startEnhancedReconciliationJob();
 
-// Routes that don't require authentication
 app.use("/tenant", TenantRouter.default);
 
-// Apply authentication middleware to protected routes
 app.use(authenticateTenant);
 app.use("/tenant/me", TenantMeRouter.default);
 app.use("/user", UserRouter.default);
