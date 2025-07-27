@@ -16,8 +16,8 @@ datasource db {
 
 enum AgendaAction {
   Poll
-  Transaction
-  Giveaway
+  // Transaction
+  // Giveaway
   Q_A
   Custom
   Quiz 
@@ -226,6 +226,7 @@ model  Agenda {
   description  String?        // Optional description for any agenda item  
   tenantId     String
   duration     Int?          // Duration in seconds, optional for some actions
+  isCompleted  Boolean       @default(false) // Whether the agenda item has been completed
   
   // Relationships
   stream       Stream         @relation(fields: [streamId], references: [id])
@@ -234,7 +235,7 @@ model  Agenda {
   // Specific content relationships based on action type
   pollContent             PollContent?            // For Poll actions
   quizContent             QuizContent?            // For Quiz actions
-  assetTransferContent    AssetTransferContent?   // For Transaction and Giveaway actions
+  // assetTransferContent    AssetTransferContent?  
   qaContent               QAContent?              // For Q_A actions
   customContent           CustomContent?          // For Custom actions
   
@@ -284,15 +285,15 @@ model QuizQuestion {
 }
 
 // Asset transfer content (for both Transaction and Giveaway actions)
-model AssetTransferContent {
-  id          String     @id @default(cuid())
-  agendaId    String     @unique
-  assetType   String     // "NFT" or "Token" or other asset types
-  transferType String     // "Transaction" or "Giveaway" - preserves the original action type intent
+// model AssetTransferContent {
+//   id          String     @id @default(cuid())
+//   agendaId    String     @unique
+//   assetType   String     // "NFT" or "Token" or other asset types
+//   transferType String     // "Transaction" or "Giveaway" - preserves the original action type intent
   
-  // Relationship
-  agenda      Agenda     @relation(fields: [agendaId], references: [id], onDelete: Cascade)
-}
+//   // Relationship
+//   agenda      Agenda     @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+// }
 
 // Q&A-specific content
 model QAContent {

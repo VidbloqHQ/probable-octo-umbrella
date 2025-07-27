@@ -4,9 +4,8 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node dist/app.js",
-    "build": "prisma generate && tsc",
-    "dev": "tsc && node dist/app.js",
+    "start": "tsc && node dist/app.js",
+    "build": "npx prisma generate && npm rebuild",
     "db:push": "npx prisma db push",
     "db:generate": "npx prisma generate",
     "test": "echo \"Error: no test specified\" && exit 1"

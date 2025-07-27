@@ -26,38 +26,31 @@ export const wss = createSocketServer(httpServer);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use(cors({
-  origin: true, // This allows any origin
+const corsOptions = {
+  origin: function (
+    origin: string | undefined,
+    callback: (err: Error | null, allow?: boolean) => void
+  ) {
+    // Always allow preflight requests from any origin
+    // The actual API requests will be filtered by the tenant auth middleware
+    callback(null, true);
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+  allowedHeaders: [
+    "Content-Type",
+    "x-api-key",
+    "x-api-secret",
+    "Authorization",
+  ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'x-api-key', 'x-api-secret', 'Authorization'],
-}));
+  maxAge: 86400, // Cache preflight response for 24 hours
+};
 
-// const corsOptions = {
-//   origin: function (
-//     origin: string | undefined,
-//     callback: (err: Error | null, allow?: boolean) => void
-//   ) {
-//     // Always allow preflight requests from any origin
-//     // The actual API requests will be filtered by the tenant auth middleware
-//     callback(null, true);
-//   },
-//   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
-//   allowedHeaders: [
-//     "Content-Type",
-//     "x-api-key",
-//     "x-api-secret",
-//     "Authorization",
-//   ],
-//   credentials: true,
-//   maxAge: 86400, // Cache preflight response for 24 hours
-// };
-
-// app.use(cors(corsOptions));
+app.use(cors(corsOptions));
 
 
 app.use(beaconHandler);
-// app.options('*', cors(corsOptions));
+app.options('*', cors(corsOptions));
 // Add body logging middleware for debugging
 app.use((req: Request, res: Response, next) => {
   // console.log(req)
