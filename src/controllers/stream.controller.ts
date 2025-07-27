@@ -526,7 +526,6 @@ export const getStream = async (req: TenantRequest, res: Response) => {
             quizContent: {
               include: { questions: true },
             },
-            assetTransferContent: true,
             qaContent: true,
             customContent: true,
           },
