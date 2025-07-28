@@ -413,12 +413,12 @@ export const updateTenant = async (req: TenantRequest, res: Response) => {
 export const getTenantInfo = async (req: TenantRequest, res: Response) => {
   try {
     // Ensure tenant is authenticated via middleware
-    console.log("First tenant:", req.tenant);
+    // console.log("First tenant:", req.tenant);
     if (!req.tenant || !req.tenant.id) {
       return res.status(401).json({ error: "Authenticated tenant required" });
     }
     const tenantId = req.tenant.id;
-    console.log("Tenant ID:", tenantId);
+    // console.log("Tenant ID:", tenantId);
 
     // Fetch tenant with all related info
     const tenant = await db.tenant.findUnique({
@@ -430,7 +430,7 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
         enabledStreamTypes: true,
       },
     });
-    console.log("Second tenant:", tenant);
+    // console.log("Second tenant:", tenant);
 
     if (!tenant) {
       return res.status(404).json({ error: "Tenant not found" });
