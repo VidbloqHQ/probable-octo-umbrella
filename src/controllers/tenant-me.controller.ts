@@ -422,7 +422,7 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
 
     // Fetch tenant with all related info
     const tenant = await db.tenant.findUnique({
-      where: { id: tenantId },
+      where: { id: "cmdmdmvqf000001abzfja162w" },
       // include: {
       //   authorizedDomains: {
       //     select: { domain: true },
