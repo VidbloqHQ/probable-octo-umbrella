@@ -422,13 +422,13 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
 
     // Fetch tenant with all related info
     const tenant = await db.tenant.findUnique({
-      where: { id: "cmdmdmvqf000001abzfja162w" },
-      // include: {
-      //   authorizedDomains: {
-      //     select: { domain: true },
-      //   },
-      //   enabledStreamTypes: true,
-      // },
+      where: { id: tenantId },
+      include: {
+        authorizedDomains: {
+          select: { domain: true },
+        },
+        enabledStreamTypes: true,
+      },
     });
     console.log("Second tenant:", tenant);
 
@@ -453,12 +453,12 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
         updatedAt: tenant.updatedAt,
         defaultStreamType: tenant.defaultStreamType,
         defaultFundingType: tenant.defaultFundingType,
-        // enabledStreamTypes: tenant.enabledStreamTypes || {
-        //   enableStream: true,
-        //   enableMeeting: true,
-        //   enablePodcast: false,
-        // },
-        // authorizedDomains: tenant.authorizedDomains.map((d) => d.domain),
+        enabledStreamTypes: tenant.enabledStreamTypes || {
+          enableStream: true,
+          enableMeeting: true,
+          enablePodcast: false,
+        },
+        authorizedDomains: tenant.authorizedDomains.map((d) => d.domain),
       },
     });
   } catch (error) {
