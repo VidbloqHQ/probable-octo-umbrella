@@ -16,8 +16,6 @@ datasource db {
 
 enum AgendaAction {
   Poll
-  // Transaction
-  // Giveaway
   Q_A
   Custom
   Quiz 
@@ -283,17 +281,6 @@ model QuizQuestion {
   
   @@index([quizContentId])
 }
-
-// Asset transfer content (for both Transaction and Giveaway actions)
-// model AssetTransferContent {
-//   id          String     @id @default(cuid())
-//   agendaId    String     @unique
-//   assetType   String     // "NFT" or "Token" or other asset types
-//   transferType String     // "Transaction" or "Giveaway" - preserves the original action type intent
-  
-//   // Relationship
-//   agenda      Agenda     @relation(fields: [agendaId], references: [id], onDelete: Cascade)
-// }
 
 // Q&A-specific content
 model QAContent {

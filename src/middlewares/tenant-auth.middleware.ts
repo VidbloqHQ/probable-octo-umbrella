@@ -50,6 +50,7 @@ export const authenticateTenant = async (
     // Attach tenant to request
     req.tenant = apiToken.tenant;
 
+    console.log("api-token", apiToken);
     next();
   } catch (error) {
     console.error("Authentication error:", error);
