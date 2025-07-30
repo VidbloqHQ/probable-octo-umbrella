@@ -180,27 +180,6 @@ export const createAgenda = async (req, res) => {
                         }
                     });
                     break;
-                case AgendaAction.Transaction:
-                case AgendaAction.Giveaway:
-                    if (!agenda.assetType) {
-                        return res.status(400).json({
-                            error: `Agenda ${index + 1}: Asset type is required for ${agenda.action}`,
-                            agendaIndex: index
-                        });
-                    }
-                    agendaRes = await db.agenda.create({
-                        data: {
-                            ...agendaData,
-                            assetTransferContent: {
-                                create: {
-                                    assetType: agenda.assetType,
-                                    transferType: actionEnum === AgendaAction.Transaction ? "Transaction" : "Giveaway"
-                                }
-                            }
-                        },
-                        include: { assetTransferContent: true }
-                    });
-                    break;
                 case AgendaAction.Q_A:
                     agendaRes = await db.agenda.create({
                         data: {
@@ -281,7 +260,6 @@ export const getStreamAgenda = async (req, res) => {
                 quizContent: {
                     include: { questions: true }
                 },
-                assetTransferContent: true,
                 qaContent: true,
                 customContent: true,
                 participantResponses: true
@@ -302,7 +280,7 @@ export const getStreamAgenda = async (req, res) => {
  */
 export const updateStreamAgenda = async (req, res) => {
     const { agendaId } = req.params;
-    const { title, description, timeStamp, wallet, action, ...contentUpdates } = req.body;
+    const { title, description, timeStamp, wallet, action, isCompleted, ...contentUpdates } = req.body;
     const tenant = req.tenant;
     try {
         // 1. Tenant verification
@@ -335,7 +313,6 @@ export const updateStreamAgenda = async (req, res) => {
                 quizContent: {
                     include: { questions: true }
                 },
-                assetTransferContent: true,
                 qaContent: true,
                 customContent: true
             }
@@ -411,6 +388,15 @@ export const updateStreamAgenda = async (req, res) => {
         }
         if (description !== undefined) {
             updateData.description = description;
+        }
+        // Handle isCompleted field
+        if (isCompleted !== undefined) {
+            if (typeof isCompleted !== 'boolean') {
+                return res.status(400).json({
+                    error: "isCompleted must be a boolean value"
+                });
+            }
+            updateData.isCompleted = isCompleted;
         }
         // Fields that can only be updated if stream is not live
         if (!isLive) {
@@ -516,22 +502,6 @@ export const updateStreamAgenda = async (req, res) => {
                     }
                 }
                 break;
-            case AgendaAction.Transaction:
-            case AgendaAction.Giveaway:
-                // Allow asset type updates even when stream is live
-                if (contentUpdates.assetType) {
-                    if (typeof contentUpdates.assetType !== 'string' || contentUpdates.assetType.trim() === '') {
-                        return res.status(400).json({ error: "Asset type must be a non-empty string" });
-                    }
-                    contentUpdate = {
-                        assetTransferContent: {
-                            update: {
-                                assetType: contentUpdates.assetType
-                            }
-                        }
-                    };
-                }
-                break;
             case AgendaAction.Q_A:
                 if (contentUpdates.topic) {
                     if (typeof contentUpdates.topic !== 'string') {
@@ -577,7 +547,6 @@ export const updateStreamAgenda = async (req, res) => {
                 quizContent: {
                     include: { questions: true }
                 },
-                assetTransferContent: true,
                 qaContent: true,
                 customContent: true
             }
@@ -596,9 +565,6 @@ export const updateStreamAgenda = async (req, res) => {
             error: "Internal server error",
         });
     }
-    //  finally {
-    //   await db.$disconnect();
-    // }
 };
 /**
  * Controller for deleting a liveStream's agenda
@@ -713,7 +679,6 @@ export const getAgenda = async (req, res) => {
                 quizContent: {
                     include: { questions: true }
                 },
-                assetTransferContent: true,
                 qaContent: true,
                 customContent: true,
                 participantResponses: true,
@@ -753,15 +718,13 @@ function getInvalidFieldsForAgendaType(actionType, contentUpdates) {
     const validFields = {
         [AgendaAction.Poll]: ['options'],
         [AgendaAction.Quiz]: ['questions'],
-        [AgendaAction.Transaction]: ['assetType'],
-        [AgendaAction.Giveaway]: ['assetType'],
         [AgendaAction.Q_A]: ['topic'],
         [AgendaAction.Custom]: ['customData']
     };
     // Check for fields that don't belong to this agenda type
-    const contentKeys = Object.keys(contentUpdates).filter(key => key !== 'title' && key !== 'description' && key !== 'timeStamp' && key !== 'wallet');
+    const contentKeys = Object.keys(contentUpdates).filter(key => key !== 'title' && key !== 'description' && key !== 'timeStamp' && key !== 'wallet' && key !== 'isCompleted');
     for (const key of contentKeys) {
-        if (!validFields[actionType].includes(key)) {
+        if (!validFields[actionType]?.includes(key)) {
             invalidFields.push(key);
         }
     }

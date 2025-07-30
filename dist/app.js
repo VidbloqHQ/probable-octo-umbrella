@@ -5,33 +5,12 @@ import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, Po
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
-import { db } from "./prisma.js";
 const app = express();
 const PORT = 8001;
 const httpServer = createServer(app);
 export const wss = createSocketServer(httpServer);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.get('/debug/db', async (req, res) => {
-    try {
-        const result = await db.$queryRaw `SELECT current_database(), current_user, version()`;
-        res.json({
-            status: 'connected',
-            result,
-            env: {
-                hasDbUrl: !!process.env.DATABASE_URL,
-                hasDirectUrl: !!process.env.DIRECT_URL,
-            }
-        });
-    }
-    catch (error) {
-        res.status(500).json({
-            status: 'error',
-            message: error.message,
-            code: error.code,
-        });
-    }
-});
 const corsOptions = {
     origin: function (origin, callback) {
         // Always allow preflight requests from any origin

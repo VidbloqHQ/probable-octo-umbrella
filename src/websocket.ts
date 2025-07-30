@@ -36,12 +36,102 @@ interface WebSocketMessage<T = unknown> {
   data: T;
 }
 
+// Contest Types
+type ContestMode = "elimination" | "tournament" | "showcase" | "custom";
+type ContestStatus = "idle" | "starting" | "active" | "voting" | "ended";
+type MediaRequirement = "required" | "optional" | "disabled";
+
+interface ContestConfig {
+  mode: ContestMode;
+  features: {
+    timer?: boolean;
+    voting?: boolean;
+    elimination?: boolean;
+    leaderboard?: boolean;
+    screenShare?: MediaRequirement;
+    camera?: MediaRequirement;
+  };
+  rules?: {
+    maxDuration?: number;
+    votingDuration?: number;
+    eliminationThreshold?: number;
+    roundsCount?: number;
+    judgeOnly?: boolean;
+    autoAdvanceRounds?: boolean;
+    minContestants?: number;
+  };
+}
+
+interface ContestState {
+  roomName: string;
+  config: ContestConfig;
+  status: ContestStatus;
+  currentRound: number;
+  startedAt: number;
+  contestants: Map<string, ContestantData>;
+  eliminated: Set<string>;
+  votes: Map<string, Vote[]>;
+  votingDeadline: number | null;
+  roundResults: RoundResult[];
+  timerEndTime: number | null;
+}
+
+interface ContestantData {
+  participantId: string;
+  name: string;
+  score: number;
+  votes: number;
+  isEliminated: boolean;
+  eliminatedRound?: number;
+}
+
+interface Vote {
+  voterId: string;
+  targetId: string;
+  score: number;
+  timestamp: number;
+  round: number;
+}
+
+interface RoundResult {
+  round: number;
+  startedAt: number;
+  endedAt: number;
+  eliminated: string[];
+  leaderboard: LeaderboardEntry[];
+}
+
+interface LeaderboardEntry {
+  participantId: string;
+  name: string;
+  score: number;
+  votes: number;
+  rank: number;
+  change: number;
+  isEliminated: boolean;
+}
+
+interface ContestResults {
+  contestId: string;
+  winner: string | null;
+  finalLeaderboard: LeaderboardEntry[];
+  rounds: RoundResult[];
+  totalVotes: number;
+  duration: number;
+}
+
+interface VotingResults {
+  round: number;
+  votes: Vote[];
+  summary: Map<string, { total: number; average: number; count: number }>;
+}
+
 // Extend WebSocket to include client-specific properties
 interface ExtendedWebSocket extends WebSocket {
   isAlive: boolean;
   roomName?: string;
   participantId?: string;
-  connectionId?: string; // Unique ID for this specific connection
+  connectionId?: string;
   lastActivityTime?: number;
 }
 
@@ -49,6 +139,11 @@ interface ExtendedWebSocket extends WebSocket {
 const roomStates: { [roomName: string]: RoomState } = {};
 export const guestRequests: { [roomName: string]: GuestRequest[] } = {};
 export const raisedHands: { [roomName: string]: RaisedHand[] } = {};
+
+// Contest state storage
+const contestStates: { [roomName: string]: ContestState } = {};
+const contestTimers: { [roomName: string]: NodeJS.Timeout } = {};
+const votingTimers: { [roomName: string]: NodeJS.Timeout } = {};
 
 // Active addons state
 const activeAddons: Record<AddonType, AddonState> = {
@@ -85,6 +180,193 @@ export let wss: WebSocket.Server;
 const generateConnectionId = () => {
   return `conn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 };
+
+// Contest Helper Functions
+function calculateLeaderboard(contest: ContestState): LeaderboardEntry[] {
+  const entries: LeaderboardEntry[] = [];
+  let rank = 1;
+
+  Array.from(contest.contestants.values())
+    .filter((c) => !c.isEliminated)
+    .sort((a, b) => b.score - a.score)
+    .forEach((contestant) => {
+      entries.push({
+        participantId: contestant.participantId,
+        name: contestant.name,
+        score: contestant.score,
+        votes: contestant.votes,
+        rank,
+        change: 0, // You could calculate this from previous round
+        isEliminated: false,
+      });
+      rank++;
+    });
+
+  return entries;
+}
+
+function startRound(
+  roomName: string,
+  round: number,
+  broadcastToRoom: Function
+) {
+  const contest = contestStates[roomName];
+  if (!contest) return;
+
+  contest.currentRound = round;
+  contest.status = "active";
+  contest.votes.clear(); // Clear votes from previous round
+
+  const duration = contest.config.rules?.maxDuration || 300;
+
+  // Set timer end time
+  contest.timerEndTime = Date.now() + duration * 1000;
+
+  // Broadcast round start
+  broadcastToRoom(roomName, "roundStart", { round, duration });
+
+  // Start round timer
+  if (contest.config.features?.timer) {
+    contestTimers[roomName] = setTimeout(() => {
+      // Auto-advance to voting phase
+      if (contest.config.features?.voting) {
+        startVotingPhase(roomName, broadcastToRoom);
+      } else {
+        endRound(roomName, broadcastToRoom);
+      }
+    }, duration * 1000);
+
+    // Send timer updates every second
+    const timerInterval = setInterval(() => {
+      if (
+        !contestStates[roomName] ||
+        contestStates[roomName].status === "ended"
+      ) {
+        clearInterval(timerInterval);
+        return;
+      }
+
+      const remaining = Math.max(
+        0,
+        Math.floor((contest.timerEndTime! - Date.now()) / 1000)
+      );
+      broadcastToRoom(roomName, "timerUpdate", { timeRemaining: remaining });
+
+      if (remaining === 0) {
+        clearInterval(timerInterval);
+      }
+    }, 1000);
+  }
+}
+
+function startVotingPhase(roomName: string, broadcastToRoom: Function) {
+  const contest = contestStates[roomName];
+  if (!contest) return;
+
+  contest.status = "voting";
+  const votingDuration = contest.config.rules?.votingDuration || 60;
+  contest.votingDeadline = Date.now() + votingDuration * 1000;
+
+  broadcastToRoom(roomName, "votingStart", { duration: votingDuration });
+
+  // Set voting timer
+  votingTimers[roomName] = setTimeout(() => {
+    endVotingPhase(roomName, broadcastToRoom);
+  }, votingDuration * 1000);
+}
+
+function endVotingPhase(roomName: string, broadcastToRoom: Function) {
+  const contest = contestStates[roomName];
+  if (!contest) return;
+
+  // Calculate voting results
+  const summary = new Map<
+    string,
+    { total: number; average: number; count: number }
+  >();
+
+  contest.votes.forEach((votes, targetId) => {
+    const total = votes.reduce((sum, vote) => sum + vote.score, 0);
+    const average = votes.length > 0 ? total / votes.length : 0;
+    summary.set(targetId, { total, average, count: votes.length });
+  });
+
+  const votingResults: VotingResults = {
+    round: contest.currentRound,
+    votes: Array.from(contest.votes.values()).flat(),
+    summary,
+  };
+
+  broadcastToRoom(roomName, "votingEnd", { results: votingResults });
+
+  // Process eliminations if enabled
+  if (contest.config.features?.elimination) {
+    processEliminations(roomName, broadcastToRoom);
+  }
+
+  endRound(roomName, broadcastToRoom);
+}
+
+function processEliminations(roomName: string, broadcastToRoom: Function) {
+  const contest = contestStates[roomName];
+  if (!contest) return;
+
+  const threshold = contest.config.rules?.eliminationThreshold || 0.3;
+  const activeContestants = Array.from(contest.contestants.values())
+    .filter((c) => !c.isEliminated)
+    .sort((a, b) => b.score - a.score);
+
+  const eliminateCount = Math.ceil(activeContestants.length * threshold);
+  const toEliminate = activeContestants.slice(-eliminateCount);
+
+  toEliminate.forEach((contestant) => {
+    contestant.isEliminated = true;
+    contestant.eliminatedRound = contest.currentRound;
+    contest.eliminated.add(contestant.participantId);
+  });
+
+  const eliminatedIds = toEliminate.map((c) => c.participantId);
+
+  if (eliminatedIds.length > 0) {
+    broadcastToRoom(roomName, "eliminationUpdate", {
+      eliminated: Array.from(contest.eliminated),
+    });
+  }
+}
+
+function endRound(roomName: string, broadcastToRoom: Function) {
+  const contest = contestStates[roomName];
+  if (!contest) return;
+
+  // Clear timers
+  if (contestTimers[roomName]) {
+    clearTimeout(contestTimers[roomName]);
+    delete contestTimers[roomName];
+  }
+
+  // Calculate and store round results
+  const leaderboard = calculateLeaderboard(contest);
+  const eliminated = Array.from(contest.contestants.values())
+    .filter((c) => c.eliminatedRound === contest.currentRound)
+    .map((c) => c.participantId);
+
+  const roundResult: RoundResult = {
+    round: contest.currentRound,
+    startedAt: contest.timerEndTime
+      ? contest.timerEndTime - (contest.config.rules?.maxDuration || 300) * 1000
+      : Date.now(),
+    endedAt: Date.now(),
+    eliminated,
+    leaderboard,
+  };
+
+  contest.roundResults.push(roundResult);
+
+  broadcastToRoom(roomName, "roundEnd", {
+    round: contest.currentRound,
+    eliminated,
+  });
+}
 
 /**
  * Creates a WebSocket server
@@ -323,6 +605,19 @@ const createWebSocketServer = (server: HttpServer) => {
           delete roomStates[roomName];
           delete guestRequests[roomName];
           delete raisedHands[roomName];
+
+          // Clean up contest state if exists
+          if (contestStates[roomName]) {
+            if (contestTimers[roomName]) {
+              clearTimeout(contestTimers[roomName]);
+              delete contestTimers[roomName];
+            }
+            if (votingTimers[roomName]) {
+              clearTimeout(votingTimers[roomName]);
+              delete votingTimers[roomName];
+            }
+            delete contestStates[roomName];
+          }
         }
       }
     };
@@ -772,55 +1067,6 @@ const createWebSocketServer = (server: HttpServer) => {
             break;
           }
 
-          // case "inviteGuest": {
-          //   const { participantId, roomName } = data as {
-          //     participantId: string;
-          //     roomName: string;
-          //   };
-
-          //   console.log(
-          //     `Processing invitation for ${participantId} in room ${roomName}`
-          //   );
-
-          //   if (guestRequests[roomName]) {
-          //     // Find the participant's request
-          //     const requestIndex = guestRequests[roomName].findIndex(
-          //       (req) => req.participantId === participantId
-          //     );
-
-          //     if (requestIndex !== -1) {
-          //       // Remove the request from the request list
-          //       guestRequests[roomName].splice(requestIndex, 1);
-
-          //       console.log(
-          //         `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
-          //       );
-
-          //       // Broadcast the updated guest request list to all clients in the room
-          //       broadcastToRoom(
-          //         roomName,
-          //         "guestRequestsUpdate",
-          //         guestRequests[roomName]
-          //       );
-
-          //       // Broadcast the invitation event to the room
-          //       broadcastToRoom(roomName, "inviteGuest", {
-          //         participantId,
-          //         roomName,
-          //       });
-          //     } else {
-          //       console.warn(
-          //         `Request for ${participantId} not found in room ${roomName}`
-          //       );
-          //     }
-          //   } else {
-          //     console.warn(`No guest requests found for room ${roomName}`);
-          //   }
-          //   break;
-          // }
-
-          // Add this to your WebSocket server's message handler in the inviteGuest case
-
           case "inviteGuest": {
             const { participantId, roomName } = data as {
               participantId: string;
@@ -884,6 +1130,7 @@ const createWebSocketServer = (server: HttpServer) => {
             }
             break;
           }
+
           case "returnToGuest": {
             const { participantId, roomName } = data as {
               participantId: string;
@@ -1058,6 +1305,259 @@ const createWebSocketServer = (server: HttpServer) => {
                 })}`
               );
             }
+
+            break;
+          }
+
+          // Contest Mode Events
+          case "startContest": {
+            const { roomName, config } = data as {
+              roomName: string;
+              config: ContestConfig;
+            };
+
+            console.log(`Starting contest in room ${roomName}`, config);
+
+            // Initialize contest state
+            const contestants = new Map<string, ContestantData>();
+
+            // Get all participants in the room
+            if (roomStates[roomName]) {
+              roomStates[roomName].participants.forEach((participantId) => {
+                // Get participant info from your participant tracking
+                contestants.set(participantId, {
+                  participantId,
+                  name: participantId, // You should get this from participant metadata
+                  score: 0,
+                  votes: 0,
+                  isEliminated: false,
+                });
+              });
+            }
+
+            contestStates[roomName] = {
+              roomName,
+              config,
+              status: "starting",
+              currentRound: 1,
+              startedAt: Date.now(),
+              contestants,
+              eliminated: new Set(),
+              votes: new Map(),
+              votingDeadline: null,
+              roundResults: [],
+              timerEndTime: null,
+            };
+
+            // Broadcast contest start to all participants
+            broadcastToRoom(roomName, "contestStart", { config });
+
+            // Start first round after a delay
+            setTimeout(() => {
+              if (contestStates[roomName]) {
+                contestStates[roomName].status = "active";
+                startRound(roomName, 1, broadcastToRoom);
+              }
+            }, 2000);
+
+            break;
+          }
+
+          case "endContest": {
+            const { roomName } = data as { roomName: string };
+
+            if (!contestStates[roomName]) {
+              console.error(`No contest found for room ${roomName}`);
+              break;
+            }
+
+            const contest = contestStates[roomName];
+
+            // Clear any active timers
+            if (contestTimers[roomName]) {
+              clearTimeout(contestTimers[roomName]);
+              delete contestTimers[roomName];
+            }
+            if (votingTimers[roomName]) {
+              clearTimeout(votingTimers[roomName]);
+              delete votingTimers[roomName];
+            }
+
+            // Calculate final results
+            const finalLeaderboard = calculateLeaderboard(contest);
+            const winner = finalLeaderboard[0]?.participantId || null;
+
+            const results: ContestResults = {
+              contestId: `${roomName}-${contest.startedAt}`,
+              winner,
+              finalLeaderboard,
+              rounds: contest.roundResults,
+              totalVotes: Array.from(contest.votes.values()).flat().length,
+              duration: Date.now() - contest.startedAt,
+            };
+
+            contest.status = "ended";
+
+            // Broadcast contest end
+            broadcastToRoom(roomName, "contestEnd", { results });
+
+            // Clean up contest state after a delay
+            setTimeout(() => {
+              delete contestStates[roomName];
+            }, 5000);
+
+            break;
+          }
+
+          case "submitVote": {
+            const { roomName, voterId, targetId, score, round } =
+              data as Vote & { roomName: string };
+
+            const contest = contestStates[roomName];
+            if (!contest || contest.status !== "voting") {
+              console.error(`Cannot vote - contest not in voting phase`);
+              break;
+            }
+
+            // Validate vote
+            const voter = contest.contestants.get(voterId);
+            const target = contest.contestants.get(targetId);
+
+            if (!voter || !target) {
+              console.error(`Invalid voter or target`);
+              break;
+            }
+
+            // Store vote
+            const vote: Vote = {
+              voterId,
+              targetId,
+              score,
+              timestamp: Date.now(),
+              round,
+            };
+
+            const targetVotes = contest.votes.get(targetId) || [];
+            contest.votes.set(targetId, [...targetVotes, vote]);
+
+            // Update contestant stats ON THE SERVER
+            target.votes++;
+            target.score += score;
+
+            // Broadcast the vote
+            broadcastToRoom(roomName, "voteSubmitted", vote);
+
+            // IMPORTANT: Also broadcast the updated contestant data
+            broadcastToRoom(roomName, "contestantUpdate", {
+              participantId: targetId,
+              score: target.score,
+              votes: target.votes,
+            });
+
+            // Broadcast updated leaderboard
+            const leaderboard = calculateLeaderboard(contest);
+            broadcastToRoom(roomName, "leaderboardUpdate", leaderboard);
+
+            break;
+          }
+
+          case "eliminateContestant": {
+            const { roomName, participantId } = data as {
+              roomName: string;
+              participantId: string;
+            };
+
+            const contest = contestStates[roomName];
+            if (!contest) break;
+
+            const contestant = contest.contestants.get(participantId);
+            if (contestant) {
+              contestant.isEliminated = true;
+              contestant.eliminatedRound = contest.currentRound;
+              contest.eliminated.add(participantId);
+            }
+
+            broadcastToRoom(roomName, "participantEliminated", {
+              participantId,
+              reason: "manual",
+            });
+
+            broadcastToRoom(roomName, "eliminationUpdate", {
+              eliminated: Array.from(contest.eliminated),
+            });
+
+            break;
+          }
+
+          case "nextRound": {
+            const { roomName } = data as { roomName: string };
+
+            const contest = contestStates[roomName];
+            if (!contest || contest.status !== "active") break;
+
+            // End current round
+            endRound(roomName, broadcastToRoom);
+
+            // Start next round after a delay
+            setTimeout(() => {
+              if (
+                contest.currentRound < (contest.config.rules?.roundsCount || 3)
+              ) {
+                startRound(roomName, contest.currentRound + 1, broadcastToRoom);
+              } else {
+                // Contest is over
+                extWs.send(
+                  JSON.stringify({ event: "endContest", data: { roomName } })
+                );
+              }
+            }, 2000);
+
+            break;
+          }
+
+          case "getContestState": {
+            const { roomName } = data as { roomName: string };
+
+            const contest = contestStates[roomName];
+            if (!contest) {
+              extWs.send(
+                JSON.stringify({
+                  event: "contestStateUpdate",
+                  data: { state: null },
+                })
+              );
+              break;
+            }
+
+            // Send current contest state with accurate scores
+            extWs.send(
+              JSON.stringify({
+                event: "contestStateUpdate",
+                data: {
+                  state: {
+                    status: contest.status,
+                    currentRound: contest.currentRound,
+                    timeRemaining: contest.timerEndTime
+                      ? Math.max(
+                          0,
+                          Math.floor((contest.timerEndTime - Date.now()) / 1000)
+                        )
+                      : 0,
+                    contestants: Array.from(contest.contestants.values()), // This includes server scores
+                    eliminated: Array.from(contest.eliminated),
+                    leaderboard: calculateLeaderboard(contest),
+                    votingTimeRemaining: contest.votingDeadline
+                      ? Math.max(
+                          0,
+                          Math.floor(
+                            (contest.votingDeadline - Date.now()) / 1000
+                          )
+                        )
+                      : 0,
+                  },
+                },
+              })
+            );
 
             break;
           }

@@ -223,7 +223,7 @@ model  Agenda {
   title        String?        // Title for any agenda item type
   description  String?        // Optional description for any agenda item  
   tenantId     String
-  duration     Int?          // Duration in seconds, optional for some actions
+  duration     Int?          // Duration in minutes, optional for some actions
   isCompleted  Boolean       @default(false) // Whether the agenda item has been completed
   
   // Relationships

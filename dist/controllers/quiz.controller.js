@@ -3,6 +3,142 @@ import { isValidWalletAddress } from "../utils/index.js";
 /**
  * Controller for submitting multiple quiz answers at once
  */
+// export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
+//   const { agendaId } = req.params;
+//   const { wallet, answers, totalScore } = req.body;
+//   const tenant = req.tenant;
+//   try {
+//     // 1. Tenant verification
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });
+//     }
+//     // 2. Input validation
+//     if (!agendaId || !wallet || !answers || !Array.isArray(answers)) {
+//       return res.status(400).json({ 
+//         error: "Missing required fields: agendaId, wallet, or answers array" 
+//       });
+//     }
+//     if (typeof totalScore !== 'number' || totalScore < 0) {
+//       return res.status(400).json({ error: "Invalid totalScore (must be a non-negative number)" });
+//     }
+//     if (!isValidWalletAddress(wallet)) {
+//       return res.status(400).json({ error: "Invalid wallet address format." });
+//     }
+//     // 3. Verify agenda belongs to tenant and is a quiz
+//     const agenda = await db.agenda.findFirst({
+//       where: {
+//         id: agendaId,
+//         tenantId: tenant.id,
+//         action: "Quiz"
+//       },
+//       include: {
+//         quizContent: {
+//           include: {
+//             questions: true
+//           }
+//         },
+//         stream: true
+//       }
+//     });
+//     if (!agenda) {
+//       return res.status(404).json({ 
+//         error: "Quiz not found",
+//         details: `Agenda ${agendaId} is not found or does not belong to your tenant`
+//       });
+//     }
+//     if (!agenda.quizContent) {
+//       return res.status(404).json({ 
+//         error: "Quiz content not found",
+//         details: `Quiz content for agenda ${agendaId} is missing`
+//       });
+//     }
+//     // 4. Verify participant
+//     const participant = await db.participant.findFirst({
+//       where: {
+//         walletAddress: wallet,
+//         streamId: agenda.stream.id,
+//         tenantId: tenant.id
+//       }
+//     });
+//     if (!participant) {
+//       return res.status(404).json({ 
+//         error: "Participant not found" 
+//       });
+//     }
+//     // 5. Check if participant has already submitted answers to this quiz
+//     const existingResponses = await db.quizResponse.findFirst({
+//       where: {
+//         question: {
+//           quizContent: {
+//             agendaId
+//           }
+//         },
+//         participantId: participant.id
+//       }
+//     });
+//     if (existingResponses) {
+//       return res.status(400).json({ 
+//         error: "You have already submitted answers to this quiz" 
+//       });
+//     }
+//     // 6. Validate all questionIds exist in this quiz
+//     const quizQuestionIds = agenda.quizContent.questions.map(q => q.id);
+//     const invalidQuestionIds = answers.filter(a => !quizQuestionIds.includes(a.questionId));
+//     if (invalidQuestionIds.length > 0) {
+//       return res.status(400).json({ 
+//         error: "Invalid question IDs in submission",
+//         invalidIds: invalidQuestionIds.map(a => a.questionId)
+//       });
+//     }
+//     // 7. Create responses for each answer using a transaction
+//     await db.$transaction(async (tx) => {
+//       // Create each response
+//       for (const answer of answers) {
+//         // Using the non-null assertion operator (!) since we've already checked above
+//         const question = agenda.quizContent!.questions.find(q => q.id === answer.questionId);
+//         if (!question) continue; // Skip if question not found (should never happen due to validation above)
+//         // Create the response
+//         await tx.quizResponse.create({
+//           data: {
+//             questionId: answer.questionId,
+//             participantId: participant.id,
+//             answer: answer.answer,
+//             isCorrect: answer.isCorrect,
+//             pointsEarned: answer.pointsEarned || 0
+//           }
+//         });
+//       }
+//       // Create a participant response record
+//       await tx.participantResponse.create({
+//         data: {
+//           agendaId: agenda.id,
+//           participantId: participant.id,
+//           responseType: "quiz_submission"
+//         }
+//       });
+//       // Update participant's total points
+//       await tx.participant.update({
+//         where: { id: participant.id },
+//         data: { 
+//           totalPoints: { increment: totalScore }
+//         }
+//       });
+//     });
+//     res.status(201).json({
+//       message: "Quiz answers submitted successfully",
+//       totalScore,
+//       answersSubmitted: answers.length
+//     });
+//   } catch (error) {
+//     console.error("Error submitting quiz answers:", error);
+//     res.status(500).json({ 
+//       error: "Internal server error",
+//     });
+//   } 
+//   // finally {
+//   //   await db.$disconnect();
+//   // }
+// };
 export const submitQuizAnswers = async (req, res) => {
     const { agendaId } = req.params;
     const { wallet, answers, totalScore } = req.body;
@@ -90,41 +226,35 @@ export const submitQuizAnswers = async (req, res) => {
                 invalidIds: invalidQuestionIds.map(a => a.questionId)
             });
         }
-        // 7. Create responses for each answer using a transaction
-        await db.$transaction(async (tx) => {
-            // Create each response
-            for (const answer of answers) {
-                // Using the non-null assertion operator (!) since we've already checked above
-                const question = agenda.quizContent.questions.find(q => q.id === answer.questionId);
-                if (!question)
-                    continue; // Skip if question not found (should never happen due to validation above)
-                // Create the response
-                await tx.quizResponse.create({
-                    data: {
-                        questionId: answer.questionId,
-                        participantId: participant.id,
-                        answer: answer.answer,
-                        isCorrect: answer.isCorrect,
-                        pointsEarned: answer.pointsEarned || 0
-                    }
-                });
-            }
-            // Create a participant response record
-            await tx.participantResponse.create({
-                data: {
-                    agendaId: agenda.id,
-                    participantId: participant.id,
-                    responseType: "quiz_submission"
-                }
-            });
-            // Update participant's total points
-            await tx.participant.update({
-                where: { id: participant.id },
-                data: {
-                    totalPoints: { increment: totalScore }
-                }
-            });
+        // 7. Prepare data for bulk operations
+        const quizResponseData = answers.map(answer => ({
+            questionId: answer.questionId,
+            participantId: participant.id,
+            answer: answer.answer,
+            isCorrect: answer.isCorrect,
+            pointsEarned: answer.pointsEarned || 0
+        }));
+        // 8. Create responses without transaction
+        console.log('Creating quiz responses...');
+        await db.quizResponse.createMany({
+            data: quizResponseData
         });
+        console.log('Creating participant response...');
+        await db.participantResponse.create({
+            data: {
+                agendaId: agenda.id,
+                participantId: participant.id,
+                responseType: "quiz_submission"
+            }
+        });
+        console.log('Updating participant points...');
+        await db.participant.update({
+            where: { id: participant.id },
+            data: {
+                totalPoints: { increment: totalScore }
+            }
+        });
+        console.log('Quiz submission completed successfully');
         res.status(201).json({
             message: "Quiz answers submitted successfully",
             totalScore,
@@ -133,13 +263,25 @@ export const submitQuizAnswers = async (req, res) => {
     }
     catch (error) {
         console.error("Error submitting quiz answers:", error);
+        // More specific error handling
+        if (typeof error === "object" && error !== null && "code" in error) {
+            if (error.code === 'P2028') {
+                return res.status(408).json({
+                    error: "Request timeout - please try again",
+                    details: "The operation took too long to complete"
+                });
+            }
+            if (error.code === 'P2002') {
+                return res.status(400).json({
+                    error: "Duplicate submission detected",
+                    details: "This quiz has already been submitted"
+                });
+            }
+        }
         res.status(500).json({
             error: "Internal server error",
         });
     }
-    // finally {
-    //   await db.$disconnect();
-    // }
 };
 /**
  * Controller for getting quiz questions (including correct answers for hosts)

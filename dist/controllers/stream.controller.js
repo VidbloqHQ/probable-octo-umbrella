@@ -434,7 +434,6 @@ export const getStream = async (req, res) => {
                         quizContent: {
                             include: { questions: true },
                         },
-                        assetTransferContent: true,
                         qaContent: true,
                         customContent: true,
                     },

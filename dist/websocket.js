@@ -4,6 +4,10 @@ import { ParticipantManager } from "./services/participantManager.js";
 const roomStates = {};
 export const guestRequests = {};
 export const raisedHands = {};
+// Contest state storage
+const contestStates = {};
+const contestTimers = {};
+const votingTimers = {};
 // Active addons state
 const activeAddons = {
     Custom: { type: "Custom", isActive: false },
@@ -28,6 +32,152 @@ export let wss;
 const generateConnectionId = () => {
     return `conn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 };
+// Contest Helper Functions
+function calculateLeaderboard(contest) {
+    const entries = [];
+    let rank = 1;
+    Array.from(contest.contestants.values())
+        .filter((c) => !c.isEliminated)
+        .sort((a, b) => b.score - a.score)
+        .forEach((contestant) => {
+        entries.push({
+            participantId: contestant.participantId,
+            name: contestant.name,
+            score: contestant.score,
+            votes: contestant.votes,
+            rank,
+            change: 0, // You could calculate this from previous round
+            isEliminated: false,
+        });
+        rank++;
+    });
+    return entries;
+}
+function startRound(roomName, round, broadcastToRoom) {
+    const contest = contestStates[roomName];
+    if (!contest)
+        return;
+    contest.currentRound = round;
+    contest.status = "active";
+    contest.votes.clear(); // Clear votes from previous round
+    const duration = contest.config.rules?.maxDuration || 300;
+    // Set timer end time
+    contest.timerEndTime = Date.now() + duration * 1000;
+    // Broadcast round start
+    broadcastToRoom(roomName, "roundStart", { round, duration });
+    // Start round timer
+    if (contest.config.features?.timer) {
+        contestTimers[roomName] = setTimeout(() => {
+            // Auto-advance to voting phase
+            if (contest.config.features?.voting) {
+                startVotingPhase(roomName, broadcastToRoom);
+            }
+            else {
+                endRound(roomName, broadcastToRoom);
+            }
+        }, duration * 1000);
+        // Send timer updates every second
+        const timerInterval = setInterval(() => {
+            if (!contestStates[roomName] ||
+                contestStates[roomName].status === "ended") {
+                clearInterval(timerInterval);
+                return;
+            }
+            const remaining = Math.max(0, Math.floor((contest.timerEndTime - Date.now()) / 1000));
+            broadcastToRoom(roomName, "timerUpdate", { timeRemaining: remaining });
+            if (remaining === 0) {
+                clearInterval(timerInterval);
+            }
+        }, 1000);
+    }
+}
+function startVotingPhase(roomName, broadcastToRoom) {
+    const contest = contestStates[roomName];
+    if (!contest)
+        return;
+    contest.status = "voting";
+    const votingDuration = contest.config.rules?.votingDuration || 60;
+    contest.votingDeadline = Date.now() + votingDuration * 1000;
+    broadcastToRoom(roomName, "votingStart", { duration: votingDuration });
+    // Set voting timer
+    votingTimers[roomName] = setTimeout(() => {
+        endVotingPhase(roomName, broadcastToRoom);
+    }, votingDuration * 1000);
+}
+function endVotingPhase(roomName, broadcastToRoom) {
+    const contest = contestStates[roomName];
+    if (!contest)
+        return;
+    // Calculate voting results
+    const summary = new Map();
+    contest.votes.forEach((votes, targetId) => {
+        const total = votes.reduce((sum, vote) => sum + vote.score, 0);
+        const average = votes.length > 0 ? total / votes.length : 0;
+        summary.set(targetId, { total, average, count: votes.length });
+    });
+    const votingResults = {
+        round: contest.currentRound,
+        votes: Array.from(contest.votes.values()).flat(),
+        summary,
+    };
+    broadcastToRoom(roomName, "votingEnd", { results: votingResults });
+    // Process eliminations if enabled
+    if (contest.config.features?.elimination) {
+        processEliminations(roomName, broadcastToRoom);
+    }
+    endRound(roomName, broadcastToRoom);
+}
+function processEliminations(roomName, broadcastToRoom) {
+    const contest = contestStates[roomName];
+    if (!contest)
+        return;
+    const threshold = contest.config.rules?.eliminationThreshold || 0.3;
+    const activeContestants = Array.from(contest.contestants.values())
+        .filter((c) => !c.isEliminated)
+        .sort((a, b) => b.score - a.score);
+    const eliminateCount = Math.ceil(activeContestants.length * threshold);
+    const toEliminate = activeContestants.slice(-eliminateCount);
+    toEliminate.forEach((contestant) => {
+        contestant.isEliminated = true;
+        contestant.eliminatedRound = contest.currentRound;
+        contest.eliminated.add(contestant.participantId);
+    });
+    const eliminatedIds = toEliminate.map((c) => c.participantId);
+    if (eliminatedIds.length > 0) {
+        broadcastToRoom(roomName, "eliminationUpdate", {
+            eliminated: Array.from(contest.eliminated),
+        });
+    }
+}
+function endRound(roomName, broadcastToRoom) {
+    const contest = contestStates[roomName];
+    if (!contest)
+        return;
+    // Clear timers
+    if (contestTimers[roomName]) {
+        clearTimeout(contestTimers[roomName]);
+        delete contestTimers[roomName];
+    }
+    // Calculate and store round results
+    const leaderboard = calculateLeaderboard(contest);
+    const eliminated = Array.from(contest.contestants.values())
+        .filter((c) => c.eliminatedRound === contest.currentRound)
+        .map((c) => c.participantId);
+    const roundResult = {
+        round: contest.currentRound,
+        startedAt: contest.timerEndTime
+            ? contest.timerEndTime - (contest.config.rules?.maxDuration || 300) * 1000
+            : Date.now(),
+        endedAt: Date.now(),
+        eliminated,
+        leaderboard,
+    };
+    contest.roundResults.push(roundResult);
+    broadcastToRoom(roomName, "roundEnd", {
+        round: contest.currentRound,
+        eliminated,
+    });
+}
 /**
  * Creates a WebSocket server
  * @param server HTTP server to attach the WebSocket server to
@@ -91,7 +241,7 @@ const createWebSocketServer = (server) => {
         const message = JSON.stringify({ event, data });
         const clients = clientsByRoom[roomName] || new Set();
         // Skip logging for high-frequency events
-        const isHighFrequencyEvent = ['ping', 'pong', 'timeSync'].includes(event);
+        const isHighFrequencyEvent = ["ping", "pong", "timeSync"].includes(event);
         if (!isHighFrequencyEvent) {
             console.log(`Broadcasting ${event} to ${clients.size} clients in room ${roomName}`);
         }
@@ -168,7 +318,7 @@ const createWebSocketServer = (server) => {
                 roomStates[roomName].participants.delete(participantId);
                 // Remove participant's request from guest requests
                 if (guestRequests[roomName]) {
-                    const hadRequest = guestRequests[roomName].some(req => req.participantId === participantId);
+                    const hadRequest = guestRequests[roomName].some((req) => req.participantId === participantId);
                     guestRequests[roomName] = guestRequests[roomName].filter((req) => req.participantId !== participantId);
                     if (hadRequest) {
                         console.log(`Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`);
@@ -193,6 +343,18 @@ const createWebSocketServer = (server) => {
                     delete roomStates[roomName];
                     delete guestRequests[roomName];
                     delete raisedHands[roomName];
+                    // Clean up contest state if exists
+                    if (contestStates[roomName]) {
+                        if (contestTimers[roomName]) {
+                            clearTimeout(contestTimers[roomName]);
+                            delete contestTimers[roomName];
+                        }
+                        if (votingTimers[roomName]) {
+                            clearTimeout(votingTimers[roomName]);
+                            delete votingTimers[roomName];
+                        }
+                        delete contestStates[roomName];
+                    }
                 }
             }
         };
@@ -210,7 +372,9 @@ const createWebSocketServer = (server) => {
             pendingDisconnects[participantId] = setTimeout(() => {
                 // Check if the participant has reconnected
                 const currentClient = clientsByIdentity[participantId];
-                if (currentClient && currentClient !== ws && currentClient.readyState === WebSocket.OPEN) {
+                if (currentClient &&
+                    currentClient !== ws &&
+                    currentClient.readyState === WebSocket.OPEN) {
                     console.log(`Participant ${participantId} reconnected with different connection`);
                     delete pendingDisconnects[participantId];
                     return;
@@ -271,7 +435,8 @@ const createWebSocketServer = (server) => {
                         if (isReconnection) {
                             console.log(`Participant ${participantId} is reconnecting`);
                             // Remove the old connection from room
-                            if (existingClient.roomName && clientsByRoom[existingClient.roomName]) {
+                            if (existingClient.roomName &&
+                                clientsByRoom[existingClient.roomName]) {
                                 clientsByRoom[existingClient.roomName].delete(existingClient);
                             }
                             // Close the old connection
@@ -288,7 +453,7 @@ const createWebSocketServer = (server) => {
                         clientsByIdentity[participantId] = extWs;
                         // Update heartbeat
                         participantHeartbeats[participantId] = Date.now();
-                        console.log(`Client ${participantId} ${isReconnection ? 'reconnected to' : 'joined'} room ${roomName}. Total clients in room: ${clientsByRoom[roomName].size}`);
+                        console.log(`Client ${participantId} ${isReconnection ? "reconnected to" : "joined"} room ${roomName}. Total clients in room: ${clientsByRoom[roomName].size}`);
                         // Initialize room state if it doesn't exist
                         let isNewRoom = false;
                         if (!roomStates[roomName]) {
@@ -468,47 +633,6 @@ const createWebSocketServer = (server) => {
                         }
                         break;
                     }
-                    // case "inviteGuest": {
-                    //   const { participantId, roomName } = data as {
-                    //     participantId: string;
-                    //     roomName: string;
-                    //   };
-                    //   console.log(
-                    //     `Processing invitation for ${participantId} in room ${roomName}`
-                    //   );
-                    //   if (guestRequests[roomName]) {
-                    //     // Find the participant's request
-                    //     const requestIndex = guestRequests[roomName].findIndex(
-                    //       (req) => req.participantId === participantId
-                    //     );
-                    //     if (requestIndex !== -1) {
-                    //       // Remove the request from the request list
-                    //       guestRequests[roomName].splice(requestIndex, 1);
-                    //       console.log(
-                    //         `Removed request for ${participantId} from room ${roomName}. Remaining requests: ${guestRequests[roomName].length}`
-                    //       );
-                    //       // Broadcast the updated guest request list to all clients in the room
-                    //       broadcastToRoom(
-                    //         roomName,
-                    //         "guestRequestsUpdate",
-                    //         guestRequests[roomName]
-                    //       );
-                    //       // Broadcast the invitation event to the room
-                    //       broadcastToRoom(roomName, "inviteGuest", {
-                    //         participantId,
-                    //         roomName,
-                    //       });
-                    //     } else {
-                    //       console.warn(
-                    //         `Request for ${participantId} not found in room ${roomName}`
-                    //       );
-                    //     }
-                    //   } else {
-                    //     console.warn(`No guest requests found for room ${roomName}`);
-                    //   }
-                    //   break;
-                    // }
-                    // Add this to your WebSocket server's message handler in the inviteGuest case
                     case "inviteGuest": {
                         const { participantId, roomName } = data;
                         console.log(`Processing invitation for ${participantId} in room ${roomName}`);
@@ -533,11 +657,11 @@ const createWebSocketServer = (server) => {
                                 console.log(`Successfully processed invitation for ${participantId}:`, {
                                     removedRequest,
                                     remainingRequests: guestRequests[roomName].length,
-                                    timestamp: new Date().toISOString()
+                                    timestamp: new Date().toISOString(),
                                 });
                             }
                             else {
-                                console.warn(`Request for ${participantId} not found in room ${roomName}. Current requests:`, guestRequests[roomName].map(req => req.participantId));
+                                console.warn(`Request for ${participantId} not found in room ${roomName}. Current requests:`, guestRequests[roomName].map((req) => req.participantId));
                             }
                         }
                         else {
@@ -581,7 +705,11 @@ const createWebSocketServer = (server) => {
                         const { roomName, reaction, sender } = data;
                         // Validate the reaction data
                         if (!roomName || !reaction || !sender) {
-                            console.error("Invalid reaction data received:", { roomName, reaction, sender });
+                            console.error("Invalid reaction data received:", {
+                                roomName,
+                                reaction,
+                                sender,
+                            });
                             break;
                         }
                         // Check if the sender is actually in the room
@@ -599,10 +727,10 @@ const createWebSocketServer = (server) => {
                             reaction,
                             sender,
                             timestamp: Date.now(),
-                            id: `${reaction}-${typeof sender === 'string' ? sender : 'unknown'}-${Date.now()}-${Math.random()}`,
-                            roomName // Include roomName in the reaction data
+                            id: `${reaction}-${typeof sender === "string" ? sender : "unknown"}-${Date.now()}-${Math.random()}`,
+                            roomName, // Include roomName in the reaction data
                         };
-                        console.log(`Broadcasting reaction from ${typeof sender === 'string' ? sender : 'unknown'} in room ${roomName}`);
+                        console.log(`Broadcasting reaction from ${typeof sender === "string" ? sender : "unknown"} in room ${roomName}`);
                         console.log(`Room ${roomName} has ${clientsByRoom[roomName].size} connected clients`);
                         // Get all clients in the room
                         const clients = clientsByRoom[roomName];
@@ -610,16 +738,16 @@ const createWebSocketServer = (server) => {
                         let failedCount = 0;
                         const clientDetails = [];
                         clients.forEach((client) => {
-                            const clientInfo = `${client.participantId || 'unknown'} (state: ${client.readyState})`;
+                            const clientInfo = `${client.participantId || "unknown"} (state: ${client.readyState})`;
                             clientDetails.push(clientInfo);
                             if (client.readyState === WebSocket.OPEN) {
                                 try {
                                     client.send(JSON.stringify({
                                         event: "receiveReaction",
-                                        data: reactionData
+                                        data: reactionData,
                                     }));
                                     sentCount++;
-                                    console.log(`✓ Sent reaction to client: ${client.participantId || 'unknown'}`);
+                                    console.log(`✓ Sent reaction to client: ${client.participantId || "unknown"}`);
                                 }
                                 catch (error) {
                                     console.error(`✗ Error sending reaction to client ${client.participantId}:`, error);
@@ -635,16 +763,205 @@ const createWebSocketServer = (server) => {
                         console.log(`- Total clients: ${clients.size}`);
                         console.log(`- Successful sends: ${sentCount}`);
                         console.log(`- Failed sends: ${failedCount}`);
-                        console.log(`- Client details: ${clientDetails.join(', ')}`);
+                        console.log(`- Client details: ${clientDetails.join(", ")}`);
                         // If no clients received the reaction, log a detailed warning
                         if (sentCount === 0) {
                             console.error(`CRITICAL: No clients received the reaction in room ${roomName}!`);
                             console.error(`Room state: ${JSON.stringify({
                                 roomExists: !!roomStates[roomName],
                                 participantCount: roomStates[roomName]?.participants.size || 0,
-                                participants: Array.from(roomStates[roomName]?.participants || [])
+                                participants: Array.from(roomStates[roomName]?.participants || []),
                             })}`);
                         }
+                        break;
+                    }
+                    // Contest Mode Events
+                    case "startContest": {
+                        const { roomName, config } = data;
+                        console.log(`Starting contest in room ${roomName}`, config);
+                        // Initialize contest state
+                        const contestants = new Map();
+                        // Get all participants in the room
+                        if (roomStates[roomName]) {
+                            roomStates[roomName].participants.forEach((participantId) => {
+                                // Get participant info from your participant tracking
+                                contestants.set(participantId, {
+                                    participantId,
+                                    name: participantId, // You should get this from participant metadata
+                                    score: 0,
+                                    votes: 0,
+                                    isEliminated: false,
+                                });
+                            });
+                        }
+                        contestStates[roomName] = {
+                            roomName,
+                            config,
+                            status: "starting",
+                            currentRound: 1,
+                            startedAt: Date.now(),
+                            contestants,
+                            eliminated: new Set(),
+                            votes: new Map(),
+                            votingDeadline: null,
+                            roundResults: [],
+                            timerEndTime: null,
+                        };
+                        // Broadcast contest start to all participants
+                        broadcastToRoom(roomName, "contestStart", { config });
+                        // Start first round after a delay
+                        setTimeout(() => {
+                            if (contestStates[roomName]) {
+                                contestStates[roomName].status = "active";
+                                startRound(roomName, 1, broadcastToRoom);
+                            }
+                        }, 2000);
+                        break;
+                    }
+                    case "endContest": {
+                        const { roomName } = data;
+                        if (!contestStates[roomName]) {
+                            console.error(`No contest found for room ${roomName}`);
+                            break;
+                        }
+                        const contest = contestStates[roomName];
+                        // Clear any active timers
+                        if (contestTimers[roomName]) {
+                            clearTimeout(contestTimers[roomName]);
+                            delete contestTimers[roomName];
+                        }
+                        if (votingTimers[roomName]) {
+                            clearTimeout(votingTimers[roomName]);
+                            delete votingTimers[roomName];
+                        }
+                        // Calculate final results
+                        const finalLeaderboard = calculateLeaderboard(contest);
+                        const winner = finalLeaderboard[0]?.participantId || null;
+                        const results = {
+                            contestId: `${roomName}-${contest.startedAt}`,
+                            winner,
+                            finalLeaderboard,
+                            rounds: contest.roundResults,
+                            totalVotes: Array.from(contest.votes.values()).flat().length,
+                            duration: Date.now() - contest.startedAt,
+                        };
+                        contest.status = "ended";
+                        // Broadcast contest end
+                        broadcastToRoom(roomName, "contestEnd", { results });
+                        // Clean up contest state after a delay
+                        setTimeout(() => {
+                            delete contestStates[roomName];
+                        }, 5000);
+                        break;
+                    }
+                    case "submitVote": {
+                        const { roomName, voterId, targetId, score, round } = data;
+                        const contest = contestStates[roomName];
+                        if (!contest || contest.status !== "voting") {
+                            console.error(`Cannot vote - contest not in voting phase`);
+                            break;
+                        }
+                        // Validate vote
+                        const voter = contest.contestants.get(voterId);
+                        const target = contest.contestants.get(targetId);
+                        if (!voter || !target) {
+                            console.error(`Invalid voter or target`);
+                            break;
+                        }
+                        // Store vote
+                        const vote = {
+                            voterId,
+                            targetId,
+                            score,
+                            timestamp: Date.now(),
+                            round,
+                        };
+                        const targetVotes = contest.votes.get(targetId) || [];
+                        contest.votes.set(targetId, [...targetVotes, vote]);
+                        // Update contestant stats ON THE SERVER
+                        target.votes++;
+                        target.score += score;
+                        // Broadcast the vote
+                        broadcastToRoom(roomName, "voteSubmitted", vote);
+                        // IMPORTANT: Also broadcast the updated contestant data
+                        broadcastToRoom(roomName, "contestantUpdate", {
+                            participantId: targetId,
+                            score: target.score,
+                            votes: target.votes,
+                        });
+                        // Broadcast updated leaderboard
+                        const leaderboard = calculateLeaderboard(contest);
+                        broadcastToRoom(roomName, "leaderboardUpdate", leaderboard);
+                        break;
+                    }
+                    case "eliminateContestant": {
+                        const { roomName, participantId } = data;
+                        const contest = contestStates[roomName];
+                        if (!contest)
+                            break;
+                        const contestant = contest.contestants.get(participantId);
+                        if (contestant) {
+                            contestant.isEliminated = true;
+                            contestant.eliminatedRound = contest.currentRound;
+                            contest.eliminated.add(participantId);
+                        }
+                        broadcastToRoom(roomName, "participantEliminated", {
+                            participantId,
+                            reason: "manual",
+                        });
+                        broadcastToRoom(roomName, "eliminationUpdate", {
+                            eliminated: Array.from(contest.eliminated),
+                        });
+                        break;
+                    }
+                    case "nextRound": {
+                        const { roomName } = data;
+                        const contest = contestStates[roomName];
+                        if (!contest || contest.status !== "active")
+                            break;
+                        // End current round
+                        endRound(roomName, broadcastToRoom);
+                        // Start next round after a delay
+                        setTimeout(() => {
+                            if (contest.currentRound < (contest.config.rules?.roundsCount || 3)) {
+                                startRound(roomName, contest.currentRound + 1, broadcastToRoom);
+                            }
+                            else {
+                                // Contest is over
+                                extWs.send(JSON.stringify({ event: "endContest", data: { roomName } }));
+                            }
+                        }, 2000);
+                        break;
+                    }
+                    case "getContestState": {
+                        const { roomName } = data;
+                        const contest = contestStates[roomName];
+                        if (!contest) {
+                            extWs.send(JSON.stringify({
+                                event: "contestStateUpdate",
+                                data: { state: null },
+                            }));
+                            break;
+                        }
+                        // Send current contest state with accurate scores
+                        extWs.send(JSON.stringify({
+                            event: "contestStateUpdate",
+                            data: {
+                                state: {
+                                    status: contest.status,
+                                    currentRound: contest.currentRound,
+                                    timeRemaining: contest.timerEndTime
+                                        ? Math.max(0, Math.floor((contest.timerEndTime - Date.now()) / 1000))
+                                        : 0,
+                                    contestants: Array.from(contest.contestants.values()), // This includes server scores
+                                    eliminated: Array.from(contest.eliminated),
+                                    leaderboard: calculateLeaderboard(contest),
+                                    votingTimeRemaining: contest.votingDeadline
+                                        ? Math.max(0, Math.floor((contest.votingDeadline - Date.now()) / 1000))
+                                        : 0,
+                                },
+                            },
+                        }));
                         break;
                     }
                     case "startAddon": {
