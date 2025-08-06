@@ -54,9 +54,10 @@ export const authenticateTenant = async (
   } catch (error) {
     console.error("Authentication error:", error);
     return res.status(500).json({ error: "Authentication error" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 // Uncomment the following code block if you want to include domain validation
