@@ -127,9 +127,10 @@ export const getStreamPDAController = async (req: TenantRequest, res: Response) 
   } catch (error) {
     console.error("Error getting stream PDA:", error);
     return res.status(500).json({ error: "Failed to get stream PDA" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -257,9 +258,10 @@ export const buildInitializeTransactionController = async (
       error: "Failed to build initialize transaction",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
   }
+  //  finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -338,9 +340,10 @@ export const buildStartStreamTransactionController = async (
       error: "Failed to build start stream transaction",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -418,9 +421,10 @@ export const buildCompleteStreamTransactionController = async (
       error: "Failed to build complete stream transaction",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -554,9 +558,10 @@ export const buildDepositTransactionController = async (
       error: "Failed to build deposit transaction",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -690,9 +695,10 @@ export const buildDistributeTransactionController = async (
       error: "Failed to build distribute transaction",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -839,9 +845,10 @@ export const buildRefundTransactionController = async (
       error: "Failed to build refund transaction",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -954,9 +961,10 @@ export const buildUpdateStreamTransactionController = async (
       error: "Failed to build update stream transaction",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 // /**
@@ -1548,9 +1556,10 @@ export const listDonationsController = async (req: TenantRequest, res: Response)
       error: "Failed to list donations",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -1626,9 +1635,10 @@ export const listDistributionsController = async (req: TenantRequest, res: Respo
       error: "Failed to list distributions",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 }; 
 
 /**
@@ -1731,9 +1741,10 @@ export const listStreamsController = async (req: TenantRequest, res: Response) =
       error: "Failed to list streams",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 // Updated recordTransactionController to handle transaction type correctly
@@ -2008,9 +2019,10 @@ export const recordTransactionController = async (req: TenantRequest, res: Respo
       error: "Failed to record transaction",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 // Also update getStreamController to handle BigInt serialization
@@ -2088,7 +2100,8 @@ export const getStreamController = async (req: TenantRequest, res: Response) => 
       error: "Failed to fetch stream",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };

@@ -245,9 +245,10 @@ export const createAgenda = async (req: TenantRequest, res: Response) => {
     res.status(500).json({ 
       error: "Internal server error",
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -305,9 +306,10 @@ export const getStreamAgenda = async (
   } catch (error) {
     console.error("Error fetching agendas:", error);
     res.status(500).json({ error: "Internal server error" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -736,9 +738,10 @@ export const deleteAgenda = async (req: TenantRequest, res: Response) => {
     res.status(500).json({ 
       error: "Internal server error",
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -796,9 +799,10 @@ export const getAgenda = async (req: TenantRequest, res: Response) => {
   } catch (error) {
     console.error("Error fetching agenda:", error);
     res.status(500).json({ error: "Internal server error" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**

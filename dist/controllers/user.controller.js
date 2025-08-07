@@ -52,9 +52,9 @@ export const createUser = async (req, res) => {
         console.error("Error creating user:", error);
         res.status(500).json({ error: "An unexpected error occurred." });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Get a user by wallet address under the current tenant
@@ -86,9 +86,9 @@ export const getUser = async (req, res) => {
         console.error("Error getting user:", error);
         res.status(500).json({ error: "An unexpected error occurred." });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Update a user under the current tenant
@@ -127,9 +127,9 @@ export const updateUser = async (req, res) => {
         console.error("Error updating user:", error);
         res.status(500).json({ error: "An unexpected error occurred." });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * List users for the current tenant
@@ -169,9 +169,9 @@ export const listUsers = async (req, res) => {
         console.error("Error listing users:", error);
         res.status(500).json({ error: "An unexpected error occurred." });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Delete a user under the current tenant
@@ -208,7 +208,7 @@ export const deleteUser = async (req, res) => {
         console.error("Error deleting user:", error);
         res.status(500).json({ error: "An unexpected error occurred." });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };

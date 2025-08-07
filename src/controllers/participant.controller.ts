@@ -54,9 +54,10 @@ export const getStreamParticipants = async (
   } catch (error) {
     console.error("Error fetching stream participants:", error);
     res.status(500).json({ error: "Internal server error" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -293,9 +294,10 @@ export const updateParticipantPermissions = async (
       error
     );
     res.status(500).json({ error: "Internal server error" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 /**
  * Controller for getting participant quiz scores and stats
@@ -383,9 +385,10 @@ export const getParticipantScores = async (
   } catch (error) {
     console.error("Error fetching participant scores:", error);
     res.status(500).json({ error: "Internal server error" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -501,9 +504,10 @@ export const updateParticipantLeftTime = async (
   } catch (error) {
     console.error("Error updating participant left time:", error);
     res.status(500).json({ error: "Internal server error" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 // Update the handleWebSocketDisconnect function
@@ -541,7 +545,8 @@ export const handleWebSocketDisconnect = async (
   } catch (error) {
     console.error("Error handling WebSocket disconnect:", error);
     res.status(500).json({ error: "Internal server error" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };

@@ -315,9 +315,9 @@ export const getPollResults = async (req, res) => {
             error: "Internal server error",
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for checking a participant's poll vote
@@ -392,7 +392,7 @@ export const getUserPollVote = async (req, res) => {
             error: "Internal server error",
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };

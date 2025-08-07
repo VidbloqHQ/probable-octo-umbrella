@@ -466,7 +466,8 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
     return res
       .status(500)
       .json({ error: "Failed to fetch tenant information" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };

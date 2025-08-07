@@ -219,9 +219,9 @@ export const createAgenda = async (req, res) => {
             error: "Internal server error",
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for getting all liveStream's agendas
@@ -271,9 +271,9 @@ export const getStreamAgenda = async (req, res) => {
         console.error("Error fetching agendas:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for updating a liveStream's agenda
@@ -649,9 +649,9 @@ export const deleteAgenda = async (req, res) => {
             error: "Internal server error",
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for getting a specific agenda by ID
@@ -705,9 +705,9 @@ export const getAgenda = async (req, res) => {
         console.error("Error fetching agenda:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Helper function to validate content updates match the agenda type

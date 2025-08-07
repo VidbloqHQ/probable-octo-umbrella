@@ -53,9 +53,9 @@ export const createTenant = async (req, res) => {
         console.error("Error creating tenant:", error);
         return res.status(500).json({ error: "Failed to create tenant" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for generating new API keys for an existing tenant
@@ -99,9 +99,9 @@ export const generateApiKey = async (req, res) => {
         console.error("Error generating API key:", error);
         return res.status(500).json({ error: "Failed to generate API key" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for listing a tenant's API keys
@@ -135,9 +135,9 @@ export const listApiKeys = async (req, res) => {
         console.error("Error listing API keys:", error);
         return res.status(500).json({ error: "Failed to list API keys" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for revoking (deactivating) an API key
@@ -166,7 +166,7 @@ export const revokeApiKey = async (req, res) => {
         console.error("Error revoking API key:", error);
         return res.status(500).json({ error: "Failed to revoke API key" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };

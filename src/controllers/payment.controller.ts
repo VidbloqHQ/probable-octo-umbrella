@@ -347,7 +347,8 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
   } catch (error) {
     console.error("Error submitting transaction:", error);
     res.status(500).json({ error: "Failed to submit transaction" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };

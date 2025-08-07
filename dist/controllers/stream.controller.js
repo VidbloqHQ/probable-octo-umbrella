@@ -246,9 +246,9 @@ export const createStream = async (req, res) => {
         console.error("Error creating stream:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    //  finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for creating access token for stream
@@ -405,9 +405,9 @@ export const createStreamToken = async (req, res) => {
         console.error("Error creating token:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for getting stream details
@@ -450,9 +450,9 @@ export const getStream = async (req, res) => {
         console.error("Error fetching stream:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for starting a stream recording
@@ -568,9 +568,9 @@ export const recordStream = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for stopping a stream recording
@@ -656,9 +656,9 @@ export const stopStreamRecord = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for updating a stream
@@ -862,9 +862,9 @@ export const updateStream = async (req, res) => {
             error: "Internal server error",
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for ending a stream
@@ -960,9 +960,9 @@ export const endStream = async (req, res) => {
             error: "Internal server error",
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for starting a stream to YouTube
@@ -1072,9 +1072,9 @@ export const streamToYoutube = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for stopping a YouTube stream
@@ -1161,7 +1161,7 @@ export const stopYoutubeStream = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };

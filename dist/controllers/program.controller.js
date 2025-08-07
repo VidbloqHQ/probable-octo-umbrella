@@ -91,9 +91,9 @@ export const getStreamPDAController = async (req, res) => {
         console.error("Error getting stream PDA:", error);
         return res.status(500).json({ error: "Failed to get stream PDA" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for building an initialize transaction
@@ -207,9 +207,9 @@ export const buildInitializeTransactionController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    //  finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for building a start stream transaction
@@ -277,9 +277,9 @@ export const buildStartStreamTransactionController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for building a complete stream transaction
@@ -346,9 +346,9 @@ export const buildCompleteStreamTransactionController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for building a deposit transaction
@@ -458,9 +458,9 @@ export const buildDepositTransactionController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for building a distribute transaction
@@ -569,9 +569,9 @@ export const buildDistributeTransactionController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for building a refund transaction
@@ -691,9 +691,9 @@ export const buildRefundTransactionController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for building an update stream transaction
@@ -787,9 +787,9 @@ export const buildUpdateStreamTransactionController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 // /**
 //  * Controller for verifying and recording a transaction submission
@@ -1311,9 +1311,9 @@ export const listDonationsController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for listing stream distributions
@@ -1380,9 +1380,9 @@ export const listDistributionsController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Helper to convert BigInt values to strings for JSON serialization
@@ -1473,9 +1473,9 @@ export const listStreamsController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 // Updated recordTransactionController to handle transaction type correctly
 export const recordTransactionController = async (req, res) => {
@@ -1710,9 +1710,9 @@ export const recordTransactionController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 // Also update getStreamController to handle BigInt serialization
 export const getStreamController = async (req, res) => {
@@ -1783,7 +1783,7 @@ export const getStreamController = async (req, res) => {
             details: error instanceof Error ? error.message : String(error),
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };

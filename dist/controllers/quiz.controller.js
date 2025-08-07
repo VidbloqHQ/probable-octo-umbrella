@@ -342,9 +342,9 @@ export const getQuizQuestions = async (req, res) => {
             error: "Internal server error",
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for getting quiz results
@@ -467,9 +467,9 @@ export const getQuizResults = async (req, res) => {
             error: "Internal server error",
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for getting a participant's quiz answers
@@ -576,7 +576,7 @@ export const getUserQuizAnswers = async (req, res) => {
             error: "Internal server error",
         });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };

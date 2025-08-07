@@ -42,9 +42,9 @@ export const getStreamParticipants = async (req, res) => {
         console.error("Error fetching stream participants:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for updating participant's leftAt time when they leave a stream
@@ -227,9 +227,9 @@ export const updateParticipantPermissions = async (req, res) => {
         console.error(`Error ${action === "promote" ? "promoting" : "demoting"} participant:`, error);
         res.status(500).json({ error: "Internal server error" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for getting participant quiz scores and stats
@@ -305,9 +305,9 @@ export const getParticipantScores = async (req, res) => {
         console.error("Error fetching participant scores:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 /**
  * Controller for handling WebSocket disconnections and updating participant data
@@ -407,9 +407,9 @@ export const updateParticipantLeftTime = async (req, res) => {
         console.error("Error updating participant left time:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };
 // Update the handleWebSocketDisconnect function
 export const handleWebSocketDisconnect = async (req, res) => {
@@ -439,7 +439,7 @@ export const handleWebSocketDisconnect = async (req, res) => {
         console.error("Error handling WebSocket disconnect:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    finally {
-        await db.$disconnect();
-    }
+    // finally {
+    //   await db.$disconnect();
+    // }
 };

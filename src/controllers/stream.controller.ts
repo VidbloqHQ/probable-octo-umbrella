@@ -316,9 +316,10 @@ export const createStream = async (req: TenantRequest, res: Response) => {
   } catch (error) {
     console.error("Error creating stream:", error);
     res.status(500).json({ error: "Internal server error" });
-  } finally {
-    await db.$disconnect();
   }
+  //  finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -493,9 +494,10 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
   } catch (error) {
     console.error("Error creating token:", error);
     res.status(500).json({ error: "Internal server error" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -542,9 +544,10 @@ export const getStream = async (req: TenantRequest, res: Response) => {
   } catch (error) {
     console.error("Error fetching stream:", error);
     res.status(500).json({ error: "Internal server error" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -679,9 +682,10 @@ export const recordStream = async (req: TenantRequest, res: Response) => {
       error: "Internal server error",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -781,9 +785,10 @@ export const stopStreamRecord = async (req: TenantRequest, res: Response) => {
       error: "Internal server error",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -1031,9 +1036,10 @@ export const updateStream = async (req: TenantRequest, res: Response) => {
     return res.status(500).json({
       error: "Internal server error",
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -1147,9 +1153,10 @@ export const endStream = async (req: TenantRequest, res: Response) => {
     return res.status(500).json({
       error: "Internal server error",
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -1281,9 +1288,10 @@ export const streamToYoutube = async (req: TenantRequest, res: Response) => {
       error: "Internal server error",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -1384,7 +1392,8 @@ export const stopYoutubeStream = async (req: TenantRequest, res: Response) => {
       error: "Internal server error",
       details: error instanceof Error ? error.message : String(error),
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };

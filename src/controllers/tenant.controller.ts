@@ -58,9 +58,10 @@ export const createTenant = async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error creating tenant:", error);
     return res.status(500).json({ error: "Failed to create tenant" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -109,9 +110,10 @@ export const generateApiKey = async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error generating API key:", error);
     return res.status(500).json({ error: "Failed to generate API key" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -148,9 +150,10 @@ export const listApiKeys = async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error listing API keys:", error);
     return res.status(500).json({ error: "Failed to list API keys" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -182,7 +185,8 @@ export const revokeApiKey = async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error revoking API key:", error);
     return res.status(500).json({ error: "Failed to revoke API key" });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };

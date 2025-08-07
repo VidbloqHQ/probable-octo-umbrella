@@ -389,9 +389,10 @@ export const getQuizQuestions = async (req: TenantRequest, res: Response) => {
     res.status(500).json({ 
       error: "Internal server error",
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -525,9 +526,10 @@ export const getQuizResults = async (req: TenantRequest, res: Response) => {
     res.status(500).json({ 
       error: "Internal server error",
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -647,7 +649,8 @@ export const getUserQuizAnswers = async (req: TenantRequest, res: Response) => {
     res.status(500).json({ 
       error: "Internal server error",
     });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };

@@ -60,9 +60,10 @@ export const createUser = async (req: TenantRequest, res: Response) => {
   } catch (error) {
     console.error("Error creating user:", error);
     res.status(500).json({ error: "An unexpected error occurred." });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -98,9 +99,10 @@ export const getUser = async (req: TenantRequest, res: Response) => {
   } catch (error) {
     console.error("Error getting user:", error);
     res.status(500).json({ error: "An unexpected error occurred." });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -144,9 +146,10 @@ export const updateUser = async (req: TenantRequest, res: Response) => {
   } catch (error) {
     console.error("Error updating user:", error);
     res.status(500).json({ error: "An unexpected error occurred." });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -190,9 +193,10 @@ export const listUsers = async (req: TenantRequest, res: Response) => {
   } catch (error) {
     console.error("Error listing users:", error);
     res.status(500).json({ error: "An unexpected error occurred." });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
 
 /**
@@ -234,7 +238,8 @@ export const deleteUser = async (req: TenantRequest, res: Response) => {
   } catch (error) {
     console.error("Error deleting user:", error);
     res.status(500).json({ error: "An unexpected error occurred." });
-  } finally {
-    await db.$disconnect();
-  }
+  } 
+  // finally {
+  //   await db.$disconnect();
+  // }
 };
