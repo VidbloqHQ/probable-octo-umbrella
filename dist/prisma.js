@@ -1,18 +1,15 @@
 import { PrismaClient } from "@prisma/client";
 const globalForPrisma = global;
-export const db = globalForPrisma.prisma ||
-    new PrismaClient({
+// Create singleton with optimized pool settings
+const prismaClientSingleton = () => {
+    return new PrismaClient({
         log: process.env.NODE_ENV === "development"
-            ? ["query", "error", "warn"]
+            ? ["error", "warn"]
             : ["error"],
         errorFormat: process.env.NODE_ENV === "development" ? "pretty" : "minimal",
-        // Important for PgBouncer compatibility
-        datasources: {
-            db: {
-                url: process.env.DATABASE_URL
-            }
-        }
     });
+};
+export const db = globalForPrisma.prisma ?? prismaClientSingleton();
 if (process.env.NODE_ENV !== "production") {
     globalForPrisma.prisma = db;
 }
@@ -20,17 +17,14 @@ if (process.env.NODE_ENV !== "production") {
 process.on("beforeExit", async () => {
     await db.$disconnect();
 });
-// Health check with smaller interval for Supabase
-if (process.env.NODE_ENV === "development") {
-    setInterval(async () => {
-        try {
-            await db.$queryRaw `SELECT 1`;
-        }
-        catch (error) {
-            console.error("Database health check failed:", error);
-        }
-    }, 60000); // Every 60 seconds
-}
+process.on("SIGTERM", async () => {
+    await db.$disconnect();
+    process.exit(0);
+});
+process.on("SIGINT", async () => {
+    await db.$disconnect();
+    process.exit(0);
+});
 export async function isDatabaseConnected() {
     try {
         await db.$queryRaw `SELECT 1`;
