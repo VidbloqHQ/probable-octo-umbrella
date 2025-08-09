@@ -4,6 +4,224 @@ import { isValidWalletAddress } from "../utils/index.js";
 /**
  * Controller for creating a agenda items for a stream
  */
+// export const createAgenda = async (req: TenantRequest, res: Response) => {
+//   const { streamId } = req.params; 
+//   const { agendas, wallet } = req.body;
+//   const tenant = req.tenant;
+//   const streamAgendas = [];
+//   try {
+//     // 1. Tenant verification
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });
+//     }
+//     // 2. Input validation
+//     if (!streamId || !agendas || !wallet) {
+//       return res.status(400).json({ 
+//         error: "Missing required fields: streamId, agendas, or wallet" 
+//       });
+//     }
+//     if (!isValidWalletAddress(wallet)) {
+//       return res.status(400).json({ error: "Invalid wallet address format." });
+//     }
+//     // 3. Verify livestream belongs to tenant and include user relation
+//     const stream = await db.stream.findFirst({
+//       where: {
+//         name: streamId,
+//         tenantId: tenant.id,
+//       },
+//       include: {
+//         user: true // Needed for host verification
+//       }
+//     });
+//     if (!stream) {
+//       return res.status(404).json({ 
+//         error: "Stream not found",
+//         details: `Stream ${streamId} not found`
+//       });
+//     }
+//     // 4. Verify requesting user permissions
+//     const requestingUser = await db.user.findFirst({
+//       where: {
+//         walletAddress: wallet,
+//         tenantId: tenant.id,
+//       },
+//     });
+//     if (!requestingUser) {
+//       return res.status(403).json({ error: "User not authorized." });
+//     }
+//     // 5. Check if user is host or co-host
+//     const isHost = requestingUser.id === stream.userId;
+//     const isCoHost = await db.participant.findFirst({
+//       where: {
+//         walletAddress: wallet,
+//         streamId: stream.id,
+//         userType: "co-host",
+//         tenantId: tenant.id,
+//         leftAt: null // Only active participants
+//       }
+//     });
+//     if (!isHost && !isCoHost) {
+//       return res.status(403).json({ 
+//         error: "Only hosts and co-hosts can create agendas",
+//         requiredRole: "host or co-host"
+//       });
+//     }
+//     // 6. Validate and process agendas
+//     for (const [index, agenda] of agendas.entries()) {
+//       // Validate required agenda fields
+//       if (typeof agenda.timeStamp !== 'number' || agenda.timeStamp < 0) {
+//         return res.status(400).json({ 
+//           error: `Agenda ${index + 1}: Invalid timeStamp (must be positive number)`,
+//           agendaIndex: index
+//         });
+//       }
+//       if (!agenda.action || typeof agenda.action !== 'string') {
+//         return res.status(400).json({
+//           error: `Agenda ${index + 1}: Action is required`,
+//           agendaIndex: index
+//         });
+//       }
+//       // Validate action enum
+//       const actionInput = agenda.action;
+//       if (!Object.values(AgendaAction).includes(actionInput as any)) {
+//         return res.status(400).json({
+//           error: `Agenda ${index + 1}: Invalid action type`,
+//           validActions: Object.values(AgendaAction),
+//           agendaIndex: index
+//         });
+//       }
+//       const actionEnum = actionInput as AgendaAction;
+//       // Validate title requirement based on action type
+//       if ((actionEnum === AgendaAction.Poll || 
+//            actionEnum === AgendaAction.Q_A || 
+//            actionEnum === AgendaAction.Quiz || 
+//            actionEnum === AgendaAction.Custom) && 
+//           (!agenda.title || typeof agenda.title !== 'string')) {
+//         return res.status(400).json({
+//           error: `Agenda ${index + 1}: Title is required for ${actionEnum} agenda`,
+//           agendaIndex: index
+//         });
+//       }
+//       // Base agenda data
+//       const agendaData = {
+//         streamId: stream.id,
+//         timeStamp: agenda.timeStamp,
+//         action: actionEnum,
+//         title: agenda.title || null, // Allow null for actions that don't require title
+//         description: agenda.description || null,
+//         duration: agenda.duration || null,
+//         tenantId: tenant.id,
+//       };
+//       // Create different content based on action type
+//       let agendaRes;
+//       switch (actionEnum) {
+//         case AgendaAction.Poll:
+//           if (!agenda.options || !Array.isArray(agenda.options) || agenda.options.length < 2) {
+//             return res.status(400).json({
+//               error: `Agenda ${index + 1}: Poll requires at least 2 options`,
+//               agendaIndex: index
+//             });
+//           }
+//           agendaRes = await db.agenda.create({
+//             data: {
+//               ...agendaData,
+//               pollContent: {
+//                 create: {
+//                   options: agenda.options,
+//                   totalVotes: 0
+//                 }
+//               }
+//             },
+//             include: { pollContent: true }
+//           });
+//           break;
+//         case AgendaAction.Quiz:
+//           if (!agenda.questions || !Array.isArray(agenda.questions) || agenda.questions.length < 1) {
+//             return res.status(400).json({
+//               error: `Agenda ${index + 1}: Quiz requires at least 1 question`,
+//               agendaIndex: index
+//             });
+//           }
+//           const quiz = await db.agenda.create({
+//             data: {
+//               ...agendaData,
+//               quizContent: {
+//                 create: {}
+//               }
+//             },
+//             include: { quizContent: true }
+//           });
+//           // Add questions to the quiz
+//           for (const question of agenda.questions) {
+//             if (!question.questionText || !question.options || !question.correctAnswer) {
+//               return res.status(400).json({
+//                 error: `Agenda ${index + 1}: Each quiz question requires questionText, options, and correctAnswer`,
+//                 agendaIndex: index
+//               });
+//             }
+//             await db.quizQuestion.create({
+//               data: {
+//                 quizContentId: quiz.quizContent!.id,
+//                 questionText: question.questionText,
+//                 options: question.options,
+//                 correctAnswer: question.correctAnswer,
+//                 isMultiChoice: question.isMultiChoice ?? true,
+//                 points: question.points ?? 1
+//               }
+//             });
+//           }
+//           // Fetch the complete quiz with questions
+//           agendaRes = await db.agenda.findUnique({
+//             where: { id: quiz.id },
+//             include: { 
+//               quizContent: {
+//                 include: { questions: true }
+//               }
+//             }
+//           });
+//           break;
+//         case AgendaAction.Q_A:
+//           agendaRes = await db.agenda.create({
+//             data: {
+//               ...agendaData,
+//               qaContent: {
+//                 create: {
+//                   // Use title as topic if no specific topic is provided
+//                   topic: agenda.topic || agenda.title || null
+//                 }
+//               }
+//             },
+//             include: { qaContent: true }
+//           });
+//           break;
+//         case AgendaAction.Custom:
+//         default:
+//           agendaRes = await db.agenda.create({
+//             data: {
+//               ...agendaData,
+//               customContent: {
+//                 create: {
+//                   customData: agenda.customData || {}
+//                 }
+//               }
+//             },
+//             include: { customContent: true }
+//           });
+//           break;
+//       }
+//       streamAgendas.push(agendaRes);
+//     }
+//     res.status(201).json(streamAgendas);
+//   } catch (error) {
+//     console.error("Error creating agenda:", error);
+//     res.status(500).json({ 
+//       error: "Internal server error",
+//     });
+//   } 
+//   // finally {
+//   //   await db.$disconnect();
+//   // }
+// };
 export const createAgenda = async (req, res) => {
     const { streamId } = req.params;
     const { agendas, wallet } = req.body;
@@ -23,50 +241,61 @@ export const createAgenda = async (req, res) => {
         if (!isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Invalid wallet address format." });
         }
-        // 3. Verify livestream belongs to tenant and include user relation
-        const stream = await db.stream.findFirst({
-            where: {
-                name: streamId,
-                tenantId: tenant.id,
-            },
-            include: {
-                user: true // Needed for host verification
-            }
-        });
+        // 3. OPTIMIZATION: Single query for all authorization data
+        // Combine stream, user, and participant checks in one go
+        const [stream, requestingUser] = await Promise.all([
+            db.stream.findFirst({
+                where: {
+                    name: streamId,
+                    tenantId: tenant.id,
+                },
+                select: {
+                    id: true,
+                    userId: true,
+                    participants: {
+                        where: {
+                            walletAddress: wallet,
+                            userType: "co-host",
+                            leftAt: null
+                        },
+                        select: { id: true }
+                    }
+                }
+            }),
+            db.user.findFirst({
+                where: {
+                    walletAddress: wallet,
+                    tenantId: tenant.id,
+                },
+                select: { id: true }
+            })
+        ]);
+        // 4. Validate stream exists
         if (!stream) {
             return res.status(404).json({
                 error: "Stream not found",
                 details: `Stream ${streamId} not found`
             });
         }
-        // 4. Verify requesting user permissions
-        const requestingUser = await db.user.findFirst({
-            where: {
-                walletAddress: wallet,
-                tenantId: tenant.id,
-            },
-        });
+        // 5. Validate user exists
         if (!requestingUser) {
             return res.status(403).json({ error: "User not authorized." });
         }
-        // 5. Check if user is host or co-host
+        // 6. Check permissions (now with data already loaded)
         const isHost = requestingUser.id === stream.userId;
-        const isCoHost = await db.participant.findFirst({
-            where: {
-                walletAddress: wallet,
-                streamId: stream.id,
-                userType: "co-host",
-                tenantId: tenant.id,
-                leftAt: null // Only active participants
-            }
-        });
+        const isCoHost = stream.participants && stream.participants.length > 0;
         if (!isHost && !isCoHost) {
             return res.status(403).json({
                 error: "Only hosts and co-hosts can create agendas",
                 requiredRole: "host or co-host"
             });
         }
-        // 6. Validate and process agendas
+        // 7. OPTIMIZATION: Validate ALL agendas before any DB operations
+        const validatedAgendas = [];
+        const pollAgendas = [];
+        const quizAgendas = [];
+        const qaAgendas = [];
+        const customAgendas = [];
         for (const [index, agenda] of agendas.entries()) {
             // Validate required agenda fields
             if (typeof agenda.timeStamp !== 'number' || agenda.timeStamp < 0) {
@@ -103,17 +332,17 @@ export const createAgenda = async (req, res) => {
                 });
             }
             // Base agenda data
-            const agendaData = {
+            const baseAgendaData = {
                 streamId: stream.id,
                 timeStamp: agenda.timeStamp,
                 action: actionEnum,
-                title: agenda.title || null, // Allow null for actions that don't require title
+                title: agenda.title || null,
                 description: agenda.description || null,
                 duration: agenda.duration || null,
                 tenantId: tenant.id,
+                originalIndex: index // Keep track of original order
             };
-            // Create different content based on action type
-            let agendaRes;
+            // Categorize and validate by type
             switch (actionEnum) {
                 case AgendaAction.Poll:
                     if (!agenda.options || !Array.isArray(agenda.options) || agenda.options.length < 2) {
@@ -122,17 +351,9 @@ export const createAgenda = async (req, res) => {
                             agendaIndex: index
                         });
                     }
-                    agendaRes = await db.agenda.create({
-                        data: {
-                            ...agendaData,
-                            pollContent: {
-                                create: {
-                                    options: agenda.options,
-                                    totalVotes: 0
-                                }
-                            }
-                        },
-                        include: { pollContent: true }
+                    pollAgendas.push({
+                        ...baseAgendaData,
+                        options: agenda.options
                     });
                     break;
                 case AgendaAction.Quiz:
@@ -142,16 +363,7 @@ export const createAgenda = async (req, res) => {
                             agendaIndex: index
                         });
                     }
-                    const quiz = await db.agenda.create({
-                        data: {
-                            ...agendaData,
-                            quizContent: {
-                                create: {}
-                            }
-                        },
-                        include: { quizContent: true }
-                    });
-                    // Add questions to the quiz
+                    // Validate all questions
                     for (const question of agenda.questions) {
                         if (!question.questionText || !question.options || !question.correctAnswer) {
                             return res.status(400).json({
@@ -159,69 +371,171 @@ export const createAgenda = async (req, res) => {
                                 agendaIndex: index
                             });
                         }
-                        await db.quizQuestion.create({
-                            data: {
-                                quizContentId: quiz.quizContent.id,
-                                questionText: question.questionText,
-                                options: question.options,
-                                correctAnswer: question.correctAnswer,
-                                isMultiChoice: question.isMultiChoice ?? true,
-                                points: question.points ?? 1
-                            }
-                        });
                     }
-                    // Fetch the complete quiz with questions
-                    agendaRes = await db.agenda.findUnique({
-                        where: { id: quiz.id },
-                        include: {
-                            quizContent: {
-                                include: { questions: true }
-                            }
-                        }
+                    quizAgendas.push({
+                        ...baseAgendaData,
+                        questions: agenda.questions
                     });
                     break;
                 case AgendaAction.Q_A:
-                    agendaRes = await db.agenda.create({
-                        data: {
-                            ...agendaData,
-                            qaContent: {
-                                create: {
-                                    // Use title as topic if no specific topic is provided
-                                    topic: agenda.topic || agenda.title || null
-                                }
-                            }
-                        },
-                        include: { qaContent: true }
+                    qaAgendas.push({
+                        ...baseAgendaData,
+                        topic: agenda.topic || agenda.title || null
                     });
                     break;
                 case AgendaAction.Custom:
                 default:
-                    agendaRes = await db.agenda.create({
-                        data: {
-                            ...agendaData,
-                            customContent: {
-                                create: {
-                                    customData: agenda.customData || {}
-                                }
-                            }
-                        },
-                        include: { customContent: true }
+                    customAgendas.push({
+                        ...baseAgendaData,
+                        customData: agenda.customData || {}
                     });
                     break;
             }
-            streamAgendas.push(agendaRes);
+            validatedAgendas.push(baseAgendaData);
+        }
+        // 8. OPTIMIZATION: Process each type in parallel batches
+        const createPromises = [];
+        const indexToAgenda = new Map();
+        // Process Poll agendas
+        if (pollAgendas.length > 0) {
+            const pollPromise = Promise.all(pollAgendas.map(async (pollAgenda) => {
+                const created = await db.agenda.create({
+                    data: {
+                        streamId: pollAgenda.streamId,
+                        timeStamp: pollAgenda.timeStamp,
+                        action: pollAgenda.action,
+                        title: pollAgenda.title,
+                        description: pollAgenda.description,
+                        duration: pollAgenda.duration,
+                        tenantId: pollAgenda.tenantId,
+                        pollContent: {
+                            create: {
+                                options: pollAgenda.options,
+                                totalVotes: 0
+                            }
+                        }
+                    },
+                    include: { pollContent: true }
+                });
+                indexToAgenda.set(pollAgenda.originalIndex, created);
+                return created;
+            }));
+            createPromises.push(pollPromise);
+        }
+        // Process Quiz agendas - OPTIMIZED with nested creates
+        if (quizAgendas.length > 0) {
+            const quizPromise = Promise.all(quizAgendas.map(async (quizAgenda) => {
+                // Create quiz with all questions in a single operation
+                const created = await db.agenda.create({
+                    data: {
+                        streamId: quizAgenda.streamId,
+                        timeStamp: quizAgenda.timeStamp,
+                        action: quizAgenda.action,
+                        title: quizAgenda.title,
+                        description: quizAgenda.description,
+                        duration: quizAgenda.duration,
+                        tenantId: quizAgenda.tenantId,
+                        quizContent: {
+                            create: {
+                                questions: {
+                                    create: quizAgenda.questions.map((q) => ({
+                                        questionText: q.questionText,
+                                        options: q.options,
+                                        correctAnswer: q.correctAnswer,
+                                        isMultiChoice: q.isMultiChoice ?? true,
+                                        points: q.points ?? 1
+                                    }))
+                                }
+                            }
+                        }
+                    },
+                    include: {
+                        quizContent: {
+                            include: { questions: true }
+                        }
+                    }
+                });
+                indexToAgenda.set(quizAgenda.originalIndex, created);
+                return created;
+            }));
+            createPromises.push(quizPromise);
+        }
+        // Process Q&A agendas
+        if (qaAgendas.length > 0) {
+            const qaPromise = Promise.all(qaAgendas.map(async (qaAgenda) => {
+                const created = await db.agenda.create({
+                    data: {
+                        streamId: qaAgenda.streamId,
+                        timeStamp: qaAgenda.timeStamp,
+                        action: qaAgenda.action,
+                        title: qaAgenda.title,
+                        description: qaAgenda.description,
+                        duration: qaAgenda.duration,
+                        tenantId: qaAgenda.tenantId,
+                        qaContent: {
+                            create: {
+                                topic: qaAgenda.topic
+                            }
+                        }
+                    },
+                    include: { qaContent: true }
+                });
+                indexToAgenda.set(qaAgenda.originalIndex, created);
+                return created;
+            }));
+            createPromises.push(qaPromise);
+        }
+        // Process Custom agendas
+        if (customAgendas.length > 0) {
+            const customPromise = Promise.all(customAgendas.map(async (customAgenda) => {
+                const created = await db.agenda.create({
+                    data: {
+                        streamId: customAgenda.streamId,
+                        timeStamp: customAgenda.timeStamp,
+                        action: customAgenda.action,
+                        title: customAgenda.title,
+                        description: customAgenda.description,
+                        duration: customAgenda.duration,
+                        tenantId: customAgenda.tenantId,
+                        customContent: {
+                            create: {
+                                customData: customAgenda.customData
+                            }
+                        }
+                    },
+                    include: { customContent: true }
+                });
+                indexToAgenda.set(customAgenda.originalIndex, created);
+                return created;
+            }));
+            createPromises.push(customPromise);
+        }
+        // 9. Wait for all creates to complete
+        await Promise.all(createPromises);
+        // 10. Restore original order
+        for (let i = 0; i < agendas.length; i++) {
+            if (indexToAgenda.has(i)) {
+                streamAgendas.push(indexToAgenda.get(i));
+            }
         }
         res.status(201).json(streamAgendas);
     }
     catch (error) {
         console.error("Error creating agenda:", error);
-        res.status(500).json({
-            error: "Internal server error",
-        });
+        // More detailed error response for debugging
+        if (process.env.NODE_ENV === 'development') {
+            res.status(500).json({
+                error: "Internal server error",
+                details: error instanceof Error ? error.message : 'Unknown error',
+                stack: error instanceof Error ? error.stack : undefined
+            });
+        }
+        else {
+            res.status(500).json({
+                error: "Internal server error"
+            });
+        }
     }
-    // finally {
-    //   await db.$disconnect();
-    // }
 };
 /**
  * Controller for getting all liveStream's agendas
