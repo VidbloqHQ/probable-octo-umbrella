@@ -1,71 +1,92 @@
 import { AccessToken } from "livekit-server-sdk";
 import WebSocket from "ws";
-import { db } from "../prisma.js";
+import { db, executeQuery, executeTransaction, trackQuery } from "../prisma.js";
 import { isValidWalletAddress, roomService, } from "../utils/index.js";
 import { clientsByRoom, clientsByIdentity } from "../websocket.js";
 import { ParticipantManager } from "../services/participantManager.js";
 import { wss } from "../app.js";
+// Cache for participant data
+const participantCache = new Map();
+const PARTICIPANT_CACHE_TTL = 30000; // 30 seconds
 /**
- * Controller for getting all stream participants
+ * Controller for getting all stream participants - OPTIMIZED
  */
 export const getStreamParticipants = async (req, res) => {
     const { streamId } = req.params;
     const tenant = req.tenant;
+    let success = false;
     try {
-        // 1. Tenant verification
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
-        // 2. Input validation
         if (!streamId) {
-            return res
-                .status(400)
-                .json({ error: "Missing required field: streamId" });
+            return res.status(400).json({ error: "Missing required field: streamId" });
         }
-        // 3. Find the stream and its participants
-        const stream = await db.stream.findFirst({
+        // Check cache first
+        const cacheKey = `${tenant.id}:${streamId}:participants`;
+        const cached = participantCache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < PARTICIPANT_CACHE_TTL) {
+            success = true;
+            return res.status(200).json({ participants: cached.data });
+        }
+        // Query with optimization
+        const stream = await executeQuery(() => db.stream.findFirst({
             where: {
                 name: streamId,
                 tenantId: tenant.id,
             },
-            include: { participants: true },
-        });
+            select: {
+                id: true,
+                participants: {
+                    select: {
+                        id: true,
+                        userName: true,
+                        walletAddress: true,
+                        userType: true,
+                        avatarUrl: true,
+                        joinedAt: true,
+                        leftAt: true,
+                        totalPoints: true,
+                    },
+                    orderBy: {
+                        joinedAt: 'desc'
+                    }
+                }
+            }
+        }), { maxRetries: 2, timeout: 10000 });
         if (!stream) {
             return res.status(404).json({
                 error: `Stream with name ${streamId} not found`,
             });
         }
-        // 4. Return participants
+        // Cache the results
+        participantCache.set(cacheKey, {
+            data: stream.participants,
+            timestamp: Date.now()
+        });
+        success = true;
         res.status(200).json({ participants: stream.participants });
     }
     catch (error) {
         console.error("Error fetching stream participants:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    // finally {
-    //   await db.$disconnect();
-    // }
+    finally {
+        trackQuery(success);
+    }
 };
 /**
- * Controller for updating participant's leftAt time when they leave a stream
- */
-/**
- * Controller for updating participant permissions (promote guest to temp-host or demote temp-host to guest)
+ * Controller for updating participant permissions - OPTIMIZED
  */
 export const updateParticipantPermissions = async (req, res) => {
     const { participantId, streamId, wallet, participantWallet, action } = req.body;
     const tenant = req.tenant;
+    let success = false;
     try {
-        // 1. Tenant verification
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
-        // 2. Input validation
-        if (!participantId ||
-            !streamId ||
-            !wallet ||
-            !participantWallet ||
-            !action) {
+        if (!participantId || !streamId || !wallet || !participantWallet || !action) {
             return res.status(400).json({
                 error: "Missing required fields: participantId, streamId, wallet, participantWallet, or action",
             });
@@ -75,71 +96,65 @@ export const updateParticipantPermissions = async (req, res) => {
                 error: "Action must be either 'promote' or 'demote'",
             });
         }
-        if (!isValidWalletAddress(wallet) ||
-            !isValidWalletAddress(participantWallet)) {
+        if (!isValidWalletAddress(wallet) || !isValidWalletAddress(participantWallet)) {
             return res.status(400).json({ error: "Invalid wallet address format." });
         }
-        // 3. Find the stream
-        const stream = await db.stream.findFirst({
-            where: {
-                name: streamId,
-                tenantId: tenant.id,
-            },
-        });
+        // Parallel fetch of stream and user
+        const [stream, requestingUser] = await Promise.all([
+            executeQuery(() => db.stream.findFirst({
+                where: {
+                    name: streamId,
+                    tenantId: tenant.id,
+                },
+                select: {
+                    id: true,
+                    userId: true,
+                }
+            }), { maxRetries: 2, timeout: 10000 }),
+            executeQuery(() => db.user.findFirst({
+                where: {
+                    walletAddress: wallet,
+                    tenantId: tenant.id,
+                },
+                select: {
+                    id: true
+                }
+            }), { maxRetries: 2, timeout: 10000 })
+        ]);
         if (!stream) {
-            return res
-                .status(404)
-                .json({ error: `Stream with name ${streamId} not found` });
+            return res.status(404).json({ error: `Stream with name ${streamId} not found` });
         }
-        // 4. Verify the requesting user is a host
-        const requestingUser = await db.user.findFirst({
-            where: {
-                walletAddress: wallet,
-                tenantId: tenant.id,
-            },
-        });
         if (!requestingUser) {
             return res.status(403).json({ error: "User not authorized." });
         }
         const isHost = requestingUser.id === stream.userId;
         if (!isHost) {
-            return res
-                .status(403)
-                .json({ error: "Only hosts can update participant permissions" });
+            return res.status(403).json({ error: "Only hosts can update participant permissions" });
         }
-        // 5. Find the participant by wallet address
-        const participant = await db.participant.findFirst({
-            where: {
-                streamId: stream.id,
-                walletAddress: participantWallet,
-                tenantId: tenant.id,
-            },
-        });
-        if (!participant) {
-            return res.status(404).json({
-                error: "Participant not found in this stream",
-                details: {
-                    streamId,
-                    participantWallet,
+        // Use transaction for updating participant
+        const result = await executeTransaction(async (tx) => {
+            const participant = await tx.participant.findFirst({
+                where: {
+                    streamId: stream.id,
+                    walletAddress: participantWallet,
+                    tenantId: tenant.id,
                 },
             });
-        }
-        // 6. Check if the participant has the expected current role
-        const expectedCurrentRole = action === "promote" ? "guest" : "temp-host";
-        const newRole = action === "promote" ? "temp-host" : "guest";
-        if (participant.userType !== expectedCurrentRole) {
-            return res.status(400).json({
-                error: `Participant is not a ${expectedCurrentRole}`,
-                currentRole: participant.userType,
+            if (!participant) {
+                throw new Error("Participant not found in this stream");
+            }
+            const expectedCurrentRole = action === "promote" ? "guest" : "temp-host";
+            const newRole = action === "promote" ? "temp-host" : "guest";
+            if (participant.userType !== expectedCurrentRole) {
+                throw new Error(`Participant is not a ${expectedCurrentRole}`);
+            }
+            const updated = await tx.participant.update({
+                where: { id: participant.id },
+                data: { userType: newRole },
             });
-        }
-        // 7. Update the participant's role in the database
-        await db.participant.update({
-            where: { id: participant.id },
-            data: { userType: newRole },
+            return { participant: updated, newRole };
         });
-        // 8. Update LiveKit permissions
-        const avatarUrl = participant.avatarUrl;
+        // Update LiveKit permissions (outside transaction)
         try {
             const livekitParticipant = await roomService.getParticipant(streamId, participantId);
             if (!livekitParticipant) {
@@ -150,16 +165,16 @@ export const updateParticipantPermissions = async (req, res) => {
                 canPublish: action === "promote",
                 canSubscribe: true,
             });
-            // 9. Generate a new token with updated permissions
+            // Generate new token
             const newAccessToken = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, {
                 identity: participantId,
                 ttl: "60m",
                 metadata: JSON.stringify({
-                    userName: participant.userName,
-                    participantId: participant.id,
-                    userType: newRole,
-                    walletAddress: participant.walletAddress,
-                    ...(avatarUrl && { avatarUrl }),
+                    userName: result.participant.userName,
+                    participantId: result.participant.id,
+                    userType: result.newRole,
+                    walletAddress: result.participant.walletAddress,
+                    ...(result.participant.avatarUrl && { avatarUrl: result.participant.avatarUrl }),
                 }),
             });
             newAccessToken.addGrant({
@@ -171,11 +186,9 @@ export const updateParticipantPermissions = async (req, res) => {
                 roomRecord: false,
             });
             const token = await newAccessToken.toJwt();
-            // 10. Send WebSocket notifications
+            // Send WebSocket notifications
             if (wss && wss.clients) {
-                // Send event to all clients in the room
                 const event = action === "promote" ? "inviteGuest" : "returnToGuest";
-                // Broadcasting room event through WebSocket
                 if (clientsByRoom[streamId]) {
                     const roomEventMessage = JSON.stringify({
                         event: event,
@@ -184,102 +197,100 @@ export const updateParticipantPermissions = async (req, res) => {
                             roomName: streamId,
                         },
                     });
-                    console.log(`Broadcasting ${event} message to all clients in room ${streamId}`);
                     clientsByRoom[streamId].forEach((client) => {
                         if (client.readyState === WebSocket.OPEN) {
                             client.send(roomEventMessage);
                         }
                     });
                 }
-                // Send token specifically to the participant
                 if (clientsByIdentity[participantId]) {
                     const tokenMessage = JSON.stringify({
                         event: "newToken",
-                        data: { token, newUserType: newRole },
+                        data: { token, newUserType: result.newRole },
                     });
-                    console.log(`Sending newToken message to participant ${participantId}`);
                     if (clientsByIdentity[participantId].readyState === WebSocket.OPEN) {
                         clientsByIdentity[participantId].send(tokenMessage);
                     }
                 }
-                else {
-                    console.warn(`Participant ${participantId} not found in connected clients`);
-                }
             }
+            // Invalidate cache
+            participantCache.delete(`${tenant.id}:${streamId}:participants`);
             const message = action === "promote"
                 ? `Invited participant ${participantId} to speak`
                 : `Revoked speaking permissions for participant ${participantId}`;
+            success = true;
             res.status(200).json({
                 message,
                 token,
                 participantId,
-                newRole,
+                newRole: result.newRole,
             });
         }
         catch (error) {
             console.error("Error updating LiveKit permissions:", error);
-            res
-                .status(500)
-                .json({ error: "Failed to update participant permissions in LiveKit" });
+            res.status(500).json({ error: "Failed to update participant permissions in LiveKit" });
         }
     }
     catch (error) {
         console.error(`Error ${action === "promote" ? "promoting" : "demoting"} participant:`, error);
+        if (error.message?.includes("not found") || error.message?.includes("not a")) {
+            return res.status(400).json({ error: error.message });
+        }
         res.status(500).json({ error: "Internal server error" });
     }
-    // finally {
-    //   await db.$disconnect();
-    // }
+    finally {
+        trackQuery(success);
+    }
 };
 /**
- * Controller for getting participant quiz scores and stats
+ * Controller for getting participant quiz scores - OPTIMIZED
  */
 export const getParticipantScores = async (req, res) => {
     const { streamId } = req.params;
     const tenant = req.tenant;
+    let success = false;
     try {
-        // 1. Tenant verification
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
-        // 2. Input validation
         if (!streamId) {
-            return res
-                .status(400)
-                .json({ error: "Missing required field: streamId" });
+            return res.status(400).json({ error: "Missing required field: streamId" });
         }
-        // 3. Find the stream
-        const stream = await db.stream.findFirst({
+        // Get stream first
+        const stream = await executeQuery(() => db.stream.findFirst({
             where: {
                 name: streamId,
                 tenantId: tenant.id,
             },
-        });
+            select: {
+                id: true,
+                name: true,
+            }
+        }), { maxRetries: 2, timeout: 10000 });
         if (!stream) {
-            return res
-                .status(404)
-                .json({ error: `Stream with name ${streamId} not found` });
+            return res.status(404).json({ error: `Stream with name ${streamId} not found` });
         }
-        // 4. Get participants with quiz responses
-        const participants = await db.participant.findMany({
+        // Get participants with quiz responses
+        const participants = await executeQuery(() => db.participant.findMany({
             where: {
                 streamId: stream.id,
                 tenantId: tenant.id,
             },
             include: {
                 quizResponses: {
-                    include: {
-                        question: true,
-                    },
+                    select: {
+                        isCorrect: true,
+                        pointsEarned: true,
+                    }
                 },
             },
             orderBy: {
                 totalPoints: "desc",
             },
-        });
-        // 5. Format the response
+        }), { maxRetries: 2, timeout: 10000 });
+        // Format the response
         const leaderboard = participants.map((participant) => {
-            const correctAnswers = participant.quizResponses.filter((r) => r.isCorrect).length;
+            const correctAnswers = participant.quizResponses.filter(r => r.isCorrect).length;
             const totalAnswers = participant.quizResponses.length;
             return {
                 participantId: participant.id,
@@ -293,6 +304,7 @@ export const getParticipantScores = async (req, res) => {
                     : 0,
             };
         });
+        success = true;
         res.status(200).json({
             stream: {
                 id: stream.id,
@@ -305,141 +317,141 @@ export const getParticipantScores = async (req, res) => {
         console.error("Error fetching participant scores:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    // finally {
-    //   await db.$disconnect();
-    // }
+    finally {
+        trackQuery(success);
+    }
 };
 /**
- * Controller for handling WebSocket disconnections and updating participant data
- */
-/**
- * Controller for updating participant's leftAt time when they leave a stream
+ * Controller for updating participant left time - OPTIMIZED
  */
 export const updateParticipantLeftTime = async (req, res) => {
     const { streamId } = req.params;
-    // const { wallet, leftAt } = req.body;
     let wallet, leftAt;
     // Handle both JSON body and FormData from sendBeacon
     if (req.method === 'POST' && req.query.method === 'PUT') {
-        // This is a sendBeacon request which comes as FormData
         wallet = req.body.wallet;
         leftAt = req.body.leftAt;
     }
     else {
-        // Regular JSON body
         ({ wallet, leftAt } = req.body);
     }
     const tenant = req.tenant;
+    let success = false;
     try {
-        // 1. Log everything for debugging
         console.log(`updateParticipantLeftTime called:`, {
             streamId,
             wallet,
             leftAt,
             tenantId: tenant?.id
         });
-        // 2. Tenant verification
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
-        // 3. Input validation
         if (!streamId || !wallet) {
-            return res
-                .status(400)
-                .json({ error: "Missing required fields: streamId, wallet" });
+            return res.status(400).json({ error: "Missing required fields: streamId, wallet" });
         }
         if (!isValidWalletAddress(wallet)) {
             console.log(`Invalid wallet address: ${wallet}`);
             return res.status(400).json({ error: "Invalid wallet address format." });
         }
-        // 4. Find the stream
-        const stream = await db.stream.findFirst({
+        // Get stream
+        const stream = await executeQuery(() => db.stream.findFirst({
             where: {
                 name: streamId,
                 tenantId: tenant.id,
             },
-        });
+            select: {
+                id: true
+            }
+        }), { maxRetries: 1, timeout: 5000 });
         if (!stream) {
             console.log(`Stream not found: ${streamId}`);
             return res.status(404).json({ error: `Stream not found` });
         }
-        // 5. Find ALL participants for this wallet (there might be duplicates)
-        console.log(`Looking for participant with wallet ${wallet} in stream ${streamId}`);
-        const participants = await db.participant.findMany({
-            where: {
-                streamId: stream.id,
-                walletAddress: wallet,
-                tenantId: tenant.id,
-            },
+        // Update all matching participants in a transaction
+        const updateCount = await executeTransaction(async (tx) => {
+            const participants = await tx.participant.findMany({
+                where: {
+                    streamId: stream.id,
+                    walletAddress: wallet,
+                    tenantId: tenant.id,
+                    leftAt: null // Only update those not already marked as left
+                },
+            });
+            if (participants.length === 0) {
+                return 0;
+            }
+            // Batch update
+            await tx.participant.updateMany({
+                where: {
+                    id: { in: participants.map((p) => p.id) },
+                    leftAt: null
+                },
+                data: {
+                    leftAt: new Date(leftAt || Date.now())
+                },
+            });
+            return participants.length;
         });
-        if (participants.length === 0) {
-            console.log(`No participants found for wallet ${wallet}`);
-            return res.status(404).json({ error: "Participant not found" });
+        if (updateCount === 0) {
+            console.log(`No active participants found for wallet ${wallet}`);
+            return res.status(404).json({ error: "No active participant found" });
         }
-        // 6. Count updates
-        let updateCount = 0;
-        // 7. Update ALL matching participants (to handle potential duplicates)
-        for (const participant of participants) {
-            if (!participant.leftAt) {
-                try {
-                    await db.participant.update({
-                        where: { id: participant.id },
-                        data: { leftAt: new Date(leftAt || Date.now()) },
-                    });
-                    updateCount++;
-                    console.log(`Updated leftAt for participant ${participant.id}`);
-                }
-                catch (error) {
-                    console.error(`Failed to update participant ${participant.id}:`, error);
-                }
-            }
-            else {
-                console.log(`Participant ${participant.id} already marked as left`);
-            }
-        }
-        // 8. Return success
+        // Invalidate cache
+        participantCache.delete(`${tenant.id}:${streamId}:participants`);
+        console.log(`Updated ${updateCount} participants for wallet ${wallet}`);
+        success = true;
         return res.status(200).json({
-            message: `${updateCount} participants updated successfully`,
-            updatedIds: participants.map(p => p.id)
+            message: `${updateCount} participants updated successfully`
         });
     }
     catch (error) {
         console.error("Error updating participant left time:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    // finally {
-    //   await db.$disconnect();
-    // }
+    finally {
+        trackQuery(success);
+    }
 };
-// Update the handleWebSocketDisconnect function
+/**
+ * Controller for handling WebSocket disconnect - OPTIMIZED
+ */
 export const handleWebSocketDisconnect = async (req, res) => {
     const { streamId, participantId } = req.params;
     const tenant = req.tenant;
+    let success = false;
     try {
-        // 1. Tenant verification
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
-        // 2. Input validation
         if (!streamId || !participantId) {
-            return res
-                .status(400)
-                .json({ error: "Missing required fields: streamId, participantId" });
+            return res.status(400).json({ error: "Missing required fields: streamId, participantId" });
         }
-        // 3. Use the centralized service to mark participant as left
+        // Use the centralized service
         const dbSuccess = await ParticipantManager.markParticipantAsLeft(streamId, null, participantId);
-        // 4. Clean up WebSocket state
         const wsSuccess = ParticipantManager.cleanupWebSocketState(streamId, participantId);
         if (!dbSuccess && !wsSuccess) {
             return res.status(404).json({ error: "Participant not found" });
         }
+        // Invalidate cache
+        participantCache.delete(`${tenant.id}:${streamId}:participants`);
+        success = true;
         res.status(200).json({ message: "Participant disconnect handled successfully" });
     }
     catch (error) {
         console.error("Error handling WebSocket disconnect:", error);
         res.status(500).json({ error: "Internal server error" });
     }
-    // finally {
-    //   await db.$disconnect();
-    // }
+    finally {
+        trackQuery(success);
+    }
 };
+// Periodic cache cleanup
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, value] of participantCache.entries()) {
+        if (now - value.timestamp > PARTICIPANT_CACHE_TTL) {
+            participantCache.delete(key);
+        }
+    }
+}, 60000); // Clean every minute

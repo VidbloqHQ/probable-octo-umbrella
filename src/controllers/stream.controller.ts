@@ -7,7 +7,7 @@ import {
   StreamProtocol,
 } from "livekit-server-sdk";
 import { StreamSessionType, CallType, StreamFundingType } from "@prisma/client";
-import { db } from "../prisma.js";
+import { db, executeQuery, executeTransaction, trackQuery } from "../prisma.js";
 import {
   generateMeetingLink,
   isValidWalletAddress,
@@ -16,42 +16,49 @@ import {
 } from "../utils/index.js";
 import { TenantRequest } from "../types/index.js";
 
+// Cache for stream lookups
+const streamCache = new Map<string, { data: any; timestamp: number }>();
+const STREAM_CACHE_TTL = 30000; // 30 seconds
+
+// Cache for tenant configuration
+const tenantConfigCache = new Map<string, { data: any; timestamp: number }>();
+const TENANT_CONFIG_CACHE_TTL = 300000; // 5 minutes
+
 /**
- * Helper function to generate a unique stream name
- * @param tenantId - The ID of the tenant for which to generate a unique stream name
- * @returns A unique stream name
+ * Helper function to generate a unique stream name - OPTIMIZED
  */
 async function generateUniqueStreamName(tenantId: string): Promise<string> {
   if (!tenantId) {
     throw new Error("Tenant ID is required to generate a unique stream name");
   }
 
-  let isUnique = false;
-  let streamName = "";
+  // Try up to 5 times to generate a unique name
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const streamName = generateMeetingLink();
 
-  while (!isUnique) {
-    streamName = generateMeetingLink();
-
-    // Check if the stream name is unique within this tenant
-    const existingStream = await db.stream.findFirst({
-      where: {
-        name: streamName,
-        tenantId: tenantId,
-      },
-    });
+    // Check if the stream name is unique
+    const existingStream = await executeQuery(
+      () => db.stream.findFirst({
+        where: {
+          name: streamName,
+          tenantId: tenantId,
+        },
+        select: { id: true }
+      }),
+      { maxRetries: 1, timeout: 5000 }
+    );
 
     if (!existingStream) {
-      isUnique = true;
+      return streamName;
     }
   }
 
-  return streamName;
+  // Fallback with timestamp to ensure uniqueness
+  return `${generateMeetingLink()}-${Date.now()}`;
 }
 
 /**
  * Helper function to get enabled stream types for a tenant
- * @param tenant - The tenant object
- * @returns An array of enabled stream types
  */
 function getEnabledStreamTypes(
   tenant: any,
@@ -59,7 +66,6 @@ function getEnabledStreamTypes(
 ): string[] {
   const enabledTypes = [];
 
-  // Either use the tenant's enabledStreamTypes or the defaults
   const effectiveTypes = tenant.enabledStreamTypes ||
     defaultTypes || {
       enableStream: true,
@@ -83,7 +89,35 @@ function getEnabledStreamTypes(
 }
 
 /**
- * Controller for creating a stream
+ * Get tenant configuration with caching
+ */
+async function getTenantConfig(tenantId: string) {
+  const cached = tenantConfigCache.get(tenantId);
+  
+  if (cached && Date.now() - cached.timestamp < TENANT_CONFIG_CACHE_TTL) {
+    return cached.data;
+  }
+
+  const tenantWithDetails = await executeQuery(
+    () => db.tenant.findUnique({
+      where: { id: tenantId },
+      include: { enabledStreamTypes: true },
+    }),
+    { maxRetries: 2, timeout: 10000 }
+  );
+
+  if (tenantWithDetails) {
+    tenantConfigCache.set(tenantId, { 
+      data: tenantWithDetails, 
+      timestamp: Date.now() 
+    });
+  }
+
+  return tenantWithDetails;
+}
+
+/**
+ * Controller for creating a stream - OPTIMIZED
  */
 export const createStream = async (req: TenantRequest, res: Response) => {
   const {
@@ -91,11 +125,12 @@ export const createStream = async (req: TenantRequest, res: Response) => {
     callType = "video",
     scheduledFor,
     title,
-    streamSessionType, // Optional override to tenant default
-    fundingType, // Optional override to tenant default
+    streamSessionType,
+    fundingType,
     isPublic = true,
   } = req.body;
   const tenant = req.tenant;
+  let success = false;
 
   try {
     // Tenant check
@@ -111,48 +146,35 @@ export const createStream = async (req: TenantRequest, res: Response) => {
       return res.status(400).json({ error: "Invalid wallet address format." });
     }
 
-    // Get tenant with more details
-    const tenantWithDetails = await db.tenant.findUnique({
-      where: { id: tenant.id },
-      include: { enabledStreamTypes: true },
-    });
+    // Get tenant configuration (cached)
+    const tenantWithDetails = await getTenantConfig(tenant.id);
 
     if (!tenantWithDetails) {
       return res.status(404).json({ error: "Tenant configuration not found." });
     }
 
-    // Define default enabled types based on schema defaults
-    // These will be used when the tenant doesn't have enabledStreamTypes set
+    // Define default enabled types
     const defaultEnabledTypes = {
-      enableStream: true, // Default from schema
-      enableMeeting: true, // Default from schema
-      enablePodcast: false, // Default from schema
+      enableStream: true,
+      enableMeeting: true,
+      enablePodcast: false,
     };
 
-    // Use either the stored enabledStreamTypes or the defaults
     const effectiveEnabledTypes =
       tenantWithDetails.enabledStreamTypes || defaultEnabledTypes;
 
-    // Determine stream session type to use
+    // Determine stream session type
     let resolvedStreamSessionType: StreamSessionType;
 
-    // CASE 1: User specified a stream type
     if (streamSessionType) {
-      // Type validation - ensure streamSessionType is a valid enum value
-      if (
-        !Object.values(StreamSessionType).includes(
-          streamSessionType as StreamSessionType
-        )
-      ) {
+      if (!Object.values(StreamSessionType).includes(streamSessionType as StreamSessionType)) {
         return res.status(400).json({
           error: "Invalid streamSessionType value",
           validTypes: Object.values(StreamSessionType),
         });
       }
 
-      // Check if the requested type is enabled using effective types
       let isEnabled = false;
-
       switch (streamSessionType as StreamSessionType) {
         case StreamSessionType.Livestream:
           isEnabled = effectiveEnabledTypes.enableStream;
@@ -168,24 +190,15 @@ export const createStream = async (req: TenantRequest, res: Response) => {
       if (!isEnabled) {
         return res.status(403).json({
           error: `${streamSessionType} is not enabled for this tenant`,
-          allowedTypes: getEnabledStreamTypes(
-            tenantWithDetails,
-            defaultEnabledTypes
-          ),
+          allowedTypes: getEnabledStreamTypes(tenantWithDetails, defaultEnabledTypes),
         });
       }
 
-      // If we passed the validation, use the requested type
       resolvedStreamSessionType = streamSessionType as StreamSessionType;
-    }
-    // CASE 2: Use tenant default
-    else {
-      // Start with the tenant default
+    } else {
       resolvedStreamSessionType = tenantWithDetails.defaultStreamType;
 
-      // Check if default type is enabled using effective types
       let isDefaultEnabled = false;
-
       switch (resolvedStreamSessionType) {
         case StreamSessionType.Livestream:
           isDefaultEnabled = effectiveEnabledTypes.enableStream;
@@ -198,7 +211,6 @@ export const createStream = async (req: TenantRequest, res: Response) => {
           break;
       }
 
-      // If the default type is disabled, try to find an enabled type
       if (!isDefaultEnabled) {
         if (effectiveEnabledTypes.enableStream) {
           resolvedStreamSessionType = StreamSessionType.Livestream;
@@ -207,7 +219,6 @@ export const createStream = async (req: TenantRequest, res: Response) => {
         } else if (effectiveEnabledTypes.enablePodcast) {
           resolvedStreamSessionType = StreamSessionType.Podcast;
         } else {
-          // No types are enabled (shouldn't happen with defaults, but just in case)
           return res.status(403).json({
             error: "No stream types are enabled for this tenant",
             defaultType: tenantWithDetails.defaultStreamType,
@@ -217,34 +228,8 @@ export const createStream = async (req: TenantRequest, res: Response) => {
       }
     }
 
-    // Final validation check before proceeding
-    let isFinalTypeEnabled = false;
-
-    switch (resolvedStreamSessionType) {
-      case StreamSessionType.Livestream:
-        isFinalTypeEnabled = effectiveEnabledTypes.enableStream;
-        break;
-      case StreamSessionType.Meeting:
-        isFinalTypeEnabled = effectiveEnabledTypes.enableMeeting;
-        break;
-      case StreamSessionType.Podcast:
-        isFinalTypeEnabled = effectiveEnabledTypes.enablePodcast;
-        break;
-    }
-
-    if (!isFinalTypeEnabled) {
-      return res.status(403).json({
-        error: `${resolvedStreamSessionType} is not enabled for this tenant`,
-        allowedTypes: getEnabledStreamTypes(
-          tenantWithDetails,
-          defaultEnabledTypes
-        ),
-      });
-    }
-
-    // Determine funding type to use (no validation needed here)
-    let resolvedFundingType =
-      fundingType || tenantWithDetails.defaultFundingType;
+    // Determine funding type
+    let resolvedFundingType = fundingType || tenantWithDetails.defaultFundingType;
 
     // Validate call type
     let resolvedCallType: CallType;
@@ -262,80 +247,82 @@ export const createStream = async (req: TenantRequest, res: Response) => {
         });
     }
 
-    // Date validation (if provided)
+    // Date validation
     if (scheduledFor && new Date(scheduledFor) < new Date()) {
-      return res
-        .status(400)
-        .json({ error: "Cannot schedule a stream in the past." });
+      return res.status(400).json({ error: "Cannot schedule a stream in the past." });
     }
 
-    // Find or create user
-    let user = await db.user.findFirst({
-      where: {
-        walletAddress: wallet,
-        tenantId: tenant.id,
-      },
-    });
-
-    if (!user) {
-      user = await db.user.create({
-        data: {
+    // Use transaction for creating user and stream
+    const result = await executeTransaction(async (tx) => {
+      // Find or create user
+      let user = await tx.user.findFirst({
+        where: {
           walletAddress: wallet,
           tenantId: tenant.id,
         },
       });
-    }
 
-    // Generate unique stream name
-    const streamName = await generateUniqueStreamName(tenant.id);
+      if (!user) {
+        user = await tx.user.create({
+          data: {
+            walletAddress: wallet,
+            tenantId: tenant.id,
+          },
+        });
+      }
 
-    // Create LiveKit room
-    const { name } = await roomService.createRoom({
-      name: streamName,
-      emptyTimeout: 300, // Default: 5 min timeout
-      maxParticipants: 100, // Default capacity
+      // Generate unique stream name
+      const streamName = await generateUniqueStreamName(tenant.id);
+
+      // Create stream
+      const stream = await tx.stream.create({
+        data: {
+          name: streamName,
+          title,
+          callType: resolvedCallType,
+          creatorWallet: wallet,
+          streamSessionType: resolvedStreamSessionType,
+          fundingType: resolvedFundingType,
+          isPublic: isPublic,
+          scheduledFor: scheduledFor ? new Date(scheduledFor) : null,
+          tenantId: tenant.id,
+          userId: user.id,
+        },
+      });
+
+      return stream;
     });
 
-    // Create stream with tenant's defaults
-    const stream = await db.stream.create({
-      data: {
-        name,
-        title,
-        callType: resolvedCallType,
-        creatorWallet: wallet,
-        streamSessionType: resolvedStreamSessionType,
-        fundingType: resolvedFundingType,
-        isPublic: isPublic,
-        scheduledFor: scheduledFor ? new Date(scheduledFor) : null,
-        tenantId: tenant.id,
-        userId: user.id,
-      },
+    // Create LiveKit room (outside transaction)
+    await roomService.createRoom({
+      name: result.name,
+      emptyTimeout: 300,
+      maxParticipants: 100,
     });
 
-    res.status(201).json(stream);
+    success = true;
+    res.status(201).json(result);
   } catch (error) {
     console.error("Error creating stream:", error);
     res.status(500).json({ error: "Internal server error" });
+  } finally {
+    trackQuery(success);
   }
-  //  finally {
-  //   await db.$disconnect();
-  // }
 };
 
 /**
- * Controller for creating access token for stream
+ * Controller for creating access token for stream - OPTIMIZED
  */
 export const createStreamToken = async (req: TenantRequest, res: Response) => {
   const { roomName, userName, wallet, avatarUrl } = req.body;
   const tenant = req.tenant;
+  let success = false;
 
   try {
-    // Tenant check
     if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
 
-    // Validate inputs
     if (!roomName || !userName || !wallet || typeof wallet !== "string") {
       return res.status(400).json({
         error: "Missing required fields: room name, wallet, and user name",
@@ -350,130 +337,141 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
       return res.status(400).json({ error: "Avatar URL must be a string." });
     }
 
-    // Find the stream with tenant check
-    const existingStream = await db.stream.findFirst({
-      where: {
-        name: roomName,
-        tenantId: tenant.id,
-      },
-      include: { user: true },
-    });
+    // Check cache for stream
+    const cacheKey = `${tenant.id}:${roomName}`;
+    let existingStream = null;
+    const cached = streamCache.get(cacheKey);
+    
+    if (cached && Date.now() - cached.timestamp < STREAM_CACHE_TTL) {
+      existingStream = cached.data;
+    } else {
+      existingStream = await executeQuery(
+        () => db.stream.findFirst({
+          where: {
+            name: roomName,
+            tenantId: tenant.id,
+          },
+          include: { user: true },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      );
+      
+      if (existingStream) {
+        streamCache.set(cacheKey, { data: existingStream, timestamp: Date.now() });
+      }
+    }
 
     if (!existingStream) {
       return res.status(404).json({ error: "Stream not found" });
     }
 
-    let user = await db.user.findFirst({
-      where: {
-        walletAddress: wallet,
-        tenantId: tenant.id,
-      },
-    });
-
-    if (!user) {
-      user = await db.user.create({
-        data: {
+    // Use transaction for user and participant operations
+    const result = await executeTransaction(async (tx) => {
+      let user = await tx.user.findFirst({
+        where: {
           walletAddress: wallet,
           tenantId: tenant.id,
         },
       });
-    }
 
-    // Determine userType
-    let userType: "host" | "co-host" | "guest";
-    if (user.id === existingStream.userId) {
-      userType = "host";
-    } else if (existingStream.streamSessionType === StreamSessionType.Meeting) {
-      userType = "co-host";
-    }
-    // else if (existingStream.streamSessionType === StreamSessionType.Livestream) {
-    //   userType = "co-host";
-    // }
-    else {
-      userType = "guest";
-    }
-
-    // Check access permissions if stream is not public
-    if (!existingStream.isPublic && userType === "guest") {
-      // Here you would check if the user has explicit permission to join
-      // This would be implemented based on your permission model
-      const hasPermission = false; // Replace with actual permission check
-
-      if (!hasPermission) {
-        return res.status(403).json({
-          error: "This stream requires permission to join",
+      if (!user) {
+        user = await tx.user.create({
+          data: {
+            walletAddress: wallet,
+            tenantId: tenant.id,
+          },
         });
       }
-    }
 
-    // Guest join validation
-    if (userType === "guest" && !existingStream.hasHost) {
-      return res.status(403).json({
-        error: "Cannot join: Waiting for host to join the room",
+      // Determine userType
+      let userType: "host" | "co-host" | "guest";
+      if (user.id === existingStream.userId) {
+        userType = "host";
+      } else if (existingStream.streamSessionType === StreamSessionType.Meeting) {
+        userType = "co-host";
+      } else {
+        userType = "guest";
+      }
+
+      // Check access permissions
+      if (!existingStream.isPublic && userType === "guest") {
+        const hasPermission = false; // Implement your permission check
+        if (!hasPermission) {
+          throw new Error("This stream requires permission to join");
+        }
+      }
+
+      // Guest join validation
+      if (userType === "guest" && !existingStream.hasHost) {
+        throw new Error("Cannot join: Waiting for host to join the room");
+      }
+
+      // Create/update participant
+      const existingParticipant = await tx.participant.findFirst({
+        where: {
+          walletAddress: wallet,
+          streamId: existingStream.id,
+          tenantId: tenant.id,
+        },
       });
-    }
 
-    // Create/update participant with tenant
-    const existingParticipant = await db.participant.findFirst({
-      where: {
-        walletAddress: wallet,
-        streamId: existingStream.id,
-        tenantId: tenant.id,
-      },
-    });
-
-    let participant;
-    if (existingParticipant) {
-      if (existingParticipant.leftAt) {
-        participant = await db.participant.update({
-          where: { id: existingParticipant.id },
+      let participant;
+      if (existingParticipant) {
+        if (existingParticipant.leftAt) {
+          participant = await tx.participant.update({
+            where: { id: existingParticipant.id },
+            data: {
+              leftAt: null,
+              userName,
+              userType,
+              ...(avatarUrl && { avatarUrl }),
+            },
+          });
+        } else {
+          participant = existingParticipant;
+        }
+      } else {
+        participant = await tx.participant.create({
           data: {
-            leftAt: null,
             userName,
+            walletAddress: wallet,
             userType,
+            streamId: existingStream.id,
+            tenantId: tenant.id,
             ...(avatarUrl && { avatarUrl }),
           },
         });
-      } else {
-        participant = existingParticipant;
       }
-    } else {
-      participant = await db.participant.create({
-        data: {
-          userName,
-          walletAddress: wallet,
-          userType,
-          streamId: existingStream.id,
-          tenantId: tenant.id,
-          ...(avatarUrl && { avatarUrl }),
-        },
-      });
-    }
 
-    // Update stream status if host joins
-    if (userType === "host") {
-      await db.stream.update({
-        where: { id: existingStream.id },
-        data: {
-          hasHost: true,
-          isLive: true,
-          startedAt: existingStream.startedAt || new Date(), // Set startedAt if not already set
-        },
-      });
-    }
+      // Update stream status if host joins
+      if (userType === "host") {
+        await tx.stream.update({
+          where: { id: existingStream.id },
+          data: {
+            hasHost: true,
+            isLive: true,
+            startedAt: existingStream.startedAt || new Date(),
+          },
+        });
+        
+        // Invalidate stream cache
+        streamCache.delete(cacheKey);
+      }
+
+      return { participant, userType };
+    });
 
     // Generate token
     const accessToken = new AccessToken(
-      process.env.LIVEKIT_API_KEY,
-      process.env.LIVEKIT_API_SECRET,
+      process.env.LIVEKIT_API_KEY!,
+      process.env.LIVEKIT_API_SECRET!,
       {
-        // identity: userName,
-        identity: participant.id,
+        identity: result.participant.id,
         ttl: "60m",
         metadata: JSON.stringify({
           userName,
-          participantId: participant.id,
-          userType,
+          participantId: result.participant.id,
+          userType: result.userType,
           walletAddress: wallet,
           ...(avatarUrl && { avatarUrl }),
         }),
@@ -483,29 +481,36 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
     accessToken.addGrant({
       roomJoin: true,
       room: roomName,
-      canPublish: userType === "host" || userType === "co-host",
+      canPublish: result.userType === "host" || result.userType === "co-host",
       canSubscribe: true,
       canPublishData: true,
-      roomRecord: userType === "host" || userType === "co-host",
+      roomRecord: result.userType === "host" || result.userType === "co-host",
     });
 
     const token = await accessToken.toJwt();
-    res.status(200).json({ token, userType });
-  } catch (error) {
+    
+    success = true;
+    res.status(200).json({ token, userType: result.userType });
+  } catch (error: any) {
     console.error("Error creating token:", error);
+    
+    if (error.message?.includes("permission") || error.message?.includes("Waiting for host")) {
+      return res.status(403).json({ error: error.message });
+    }
+    
     res.status(500).json({ error: "Internal server error" });
-  } 
-  // finally {
-  //   await db.$disconnect();
-  // }
+  } finally {
+    trackQuery(success);
+  }
 };
 
 /**
- * Controller for getting stream details
+ * Controller for getting stream details - OPTIMIZED
  */
 export const getStream = async (req: TenantRequest, res: Response) => {
   const { streamId } = req.params;
   const tenant = req.tenant;
+  let success = false;
 
   try {
     if (!tenant) {
@@ -516,54 +521,79 @@ export const getStream = async (req: TenantRequest, res: Response) => {
       return res.status(400).json({ error: "Missing stream ID." });
     }
 
-    const stream = await db.stream.findFirst({
-      where: {
-        name: streamId,
-        tenantId: tenant.id,
-      },
-      include: {
-        agenda: {
-          include: {
-            pollContent: true,
-            quizContent: {
-              include: { questions: true },
+    // Check cache first
+    const cacheKey = `${tenant.id}:${streamId}:full`;
+    const cached = streamCache.get(cacheKey);
+    
+    if (cached && Date.now() - cached.timestamp < STREAM_CACHE_TTL) {
+      success = true;
+      return res.status(200).json(cached.data);
+    }
+
+    const stream = await executeQuery(
+      () => db.stream.findFirst({
+        where: {
+          name: streamId,
+          tenantId: tenant.id,
+        },
+        include: {
+          agenda: {
+            include: {
+              pollContent: true,
+              quizContent: {
+                include: { questions: true },
+              },
+              qaContent: true,
+              customContent: true,
             },
-            qaContent: true,
-            customContent: true,
+          },
+          participants: {
+            select: {
+              id: true,
+              userName: true,
+              walletAddress: true,
+              userType: true,
+              avatarUrl: true,
+              joinedAt: true,
+              leftAt: true,
+              totalPoints: true,
+            }
           },
         },
-        participants: true,
-      },
-    });
+      }),
+      { maxRetries: 2, timeout: 10000 }
+    );
 
     if (!stream) {
       return res.status(404).json({ error: "Stream not found." });
     }
 
+    // Cache the result
+    streamCache.set(cacheKey, { data: stream, timestamp: Date.now() });
+
+    success = true;
     res.status(200).json(stream);
   } catch (error) {
     console.error("Error fetching stream:", error);
     res.status(500).json({ error: "Internal server error" });
-  } 
-  // finally {
-  //   await db.$disconnect();
-  // }
+  } finally {
+    trackQuery(success);
+  }
 };
 
 /**
- * Controller for starting a stream recording
+ * Controller for recording stream - OPTIMIZED
  */
 export const recordStream = async (req: TenantRequest, res: Response) => {
   const { roomName, wallet } = req.body;
   const tenant = req.tenant;
+  let success = false;
 
   try {
-    // 1. Tenant verification
     if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
 
-    // 2. Input validation
     if (!roomName || !wallet || typeof wallet !== "string") {
       return res.status(400).json({
         error: "Missing required fields: room name and wallet",
@@ -574,36 +604,41 @@ export const recordStream = async (req: TenantRequest, res: Response) => {
       return res.status(400).json({ error: "Invalid wallet address format." });
     }
 
-    // 3. Verify stream belongs to tenant and include user relationship
-    const stream = await db.stream.findFirst({
-      where: {
-        name: roomName,
-        tenantId: tenant.id,
-      },
-      include: {
-        user: true,
-      },
-    });
+    // Get stream and verify permissions
+    const [stream, user] = await Promise.all([
+      executeQuery(
+        () => db.stream.findFirst({
+          where: {
+            name: roomName,
+            tenantId: tenant.id,
+          },
+          include: {
+            user: true,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      ),
+      executeQuery(
+        () => db.user.findFirst({
+          where: {
+            walletAddress: wallet,
+            tenantId: tenant.id,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      )
+    ]);
 
     if (!stream) {
       return res.status(404).json({ error: "Stream not found." });
     }
 
-    // 4. Check if stream is already being recorded
     if (stream.recording) {
       return res.status(400).json({
         error: "Stream is already being recorded",
         recordId: stream.recordId,
       });
     }
-
-    // 5. Get user and determine user type
-    const user = await db.user.findFirst({
-      where: {
-        walletAddress: wallet,
-        tenantId: tenant.id,
-      },
-    });
 
     if (!user) {
       return res.status(403).json({ error: "User not found" });
@@ -618,18 +653,17 @@ export const recordStream = async (req: TenantRequest, res: Response) => {
       userType = "guest";
     }
 
-    // 6. Verify user has recording privileges
     if (userType !== "host" && userType !== "co-host") {
       return res.status(403).json({
         error: "Only hosts and co-hosts can record streams.",
       });
     }
 
-    // 7. Start recording
+    // Start recording
     const egressService = new EgressClient(
       livekitHost,
-      process.env.LIVEKIT_API_KEY,
-      process.env.LIVEKIT_API_SECRET
+      process.env.LIVEKIT_API_KEY!,
+      process.env.LIVEKIT_API_SECRET!
     );
 
     const output = {
@@ -662,15 +696,22 @@ export const recordStream = async (req: TenantRequest, res: Response) => {
         .status(500)
         .json({ error: "Failed to start recording. Please try again" });
     }
-    console.log({ egressInfo });
-    await db.stream.update({
-      where: { id: stream.id },
-      data: {
-        recording: true,
-        recordId: egressInfo.egressId, // Store the recording ID
-      },
-    });
 
+    await executeQuery(
+      () => db.stream.update({
+        where: { id: stream.id },
+        data: {
+          recording: true,
+          recordId: egressInfo.egressId,
+        },
+      }),
+      { maxRetries: 2, timeout: 10000 }
+    );
+
+    // Invalidate cache
+    streamCache.delete(`${tenant.id}:${roomName}`);
+
+    success = true;
     res.status(201).json({
       message: "Recording started",
       recordingId: egressInfo.egressId,
@@ -682,26 +723,24 @@ export const recordStream = async (req: TenantRequest, res: Response) => {
       error: "Internal server error",
       details: error instanceof Error ? error.message : String(error),
     });
-  } 
-  // finally {
-  //   await db.$disconnect();
-  // }
+  } finally {
+    trackQuery(success);
+  }
 };
 
 /**
- * Controller for stopping a stream recording
+ * Controller for stopping stream recording - OPTIMIZED
  */
 export const stopStreamRecord = async (req: TenantRequest, res: Response) => {
   const { recordId, wallet } = req.body;
   const tenant = req.tenant;
+  let success = false;
 
   try {
-    // 1. Tenant verification
     if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
 
-    // 2. Input validation
     if (!recordId || !wallet || typeof wallet !== "string") {
       return res.status(400).json({
         error: "Missing required fields: recordId and wallet",
@@ -712,29 +751,34 @@ export const stopStreamRecord = async (req: TenantRequest, res: Response) => {
       return res.status(400).json({ error: "Invalid wallet address format." });
     }
 
-    // 3. Find the stream with this recording
-    const stream = await db.stream.findFirst({
-      where: {
-        recordId,
-        tenantId: tenant.id,
-        recording: true,
-      },
-      include: {
-        user: true,
-      },
-    });
+    const [stream, user] = await Promise.all([
+      executeQuery(
+        () => db.stream.findFirst({
+          where: {
+            recordId,
+            tenantId: tenant.id,
+            recording: true,
+          },
+          include: {
+            user: true,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      ),
+      executeQuery(
+        () => db.user.findFirst({
+          where: {
+            walletAddress: wallet,
+            tenantId: tenant.id,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      )
+    ]);
 
     if (!stream) {
       return res.status(404).json({ error: "Active recording not found" });
     }
-
-    // 4. Verify user permissions
-    const user = await db.user.findFirst({
-      where: {
-        walletAddress: wallet,
-        tenantId: tenant.id,
-      },
-    });
 
     if (!user) {
       return res.status(403).json({ error: "User not found" });
@@ -749,31 +793,34 @@ export const stopStreamRecord = async (req: TenantRequest, res: Response) => {
       userType = "guest";
     }
 
-    // 5. Verify user has recording privileges
     if (userType !== "host" && userType !== "co-host") {
       return res.status(403).json({
         error: "Only hosts and co-hosts can stop recordings.",
       });
     }
 
-    // 6. Stop the recording
     const egressService = new EgressClient(
       livekitHost,
-      process.env.LIVEKIT_API_KEY,
-      process.env.LIVEKIT_API_SECRET
+      process.env.LIVEKIT_API_KEY!,
+      process.env.LIVEKIT_API_SECRET!
     );
 
     await egressService.stopEgress(recordId);
 
-    // 7. Update stream record
-    await db.stream.update({
-      where: { id: stream.id },
-      data: {
-        recording: false,
-        // recordLink will be set when the recording is processed and available
-      },
-    });
+    await executeQuery(
+      () => db.stream.update({
+        where: { id: stream.id },
+        data: {
+          recording: false,
+        },
+      }),
+      { maxRetries: 2, timeout: 10000 }
+    );
 
+    // Invalidate cache
+    streamCache.delete(`${tenant.id}:${stream.name}`);
+
+    success = true;
     res.status(200).json({
       message: "Recording stopped successfully",
       streamId: stream.id,
@@ -785,14 +832,13 @@ export const stopStreamRecord = async (req: TenantRequest, res: Response) => {
       error: "Internal server error",
       details: error instanceof Error ? error.message : String(error),
     });
-  } 
-  // finally {
-  //   await db.$disconnect();
-  // }
+  } finally {
+    trackQuery(success);
+  }
 };
 
 /**
- * Controller for updating a stream
+ * Controller for updating stream - OPTIMIZED
  */
 export const updateStream = async (req: TenantRequest, res: Response) => {
   const { streamId } = req.params;
@@ -806,9 +852,9 @@ export const updateStream = async (req: TenantRequest, res: Response) => {
     wallet,
   } = req.body;
   const tenant = req.tenant;
+  let success = false;
 
   try {
-    // 1. Tenant verification
     if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
@@ -818,25 +864,36 @@ export const updateStream = async (req: TenantRequest, res: Response) => {
     }
 
     if (!wallet || typeof wallet !== "string") {
-      return res
-        .status(400)
-        .json({ error: "Valid wallet address is required." });
+      return res.status(400).json({ error: "Valid wallet address is required." });
     }
 
     if (!isValidWalletAddress(wallet)) {
       return res.status(400).json({ error: "Invalid wallet address format." });
     }
 
-    // 2. Find the stream by name
-    const existingStream = await db.stream.findFirst({
-      where: {
-        name: streamId,
-        tenantId: tenant.id,
-      },
-      include: {
-        user: true,
-      },
-    });
+    const [existingStream, requestingUser] = await Promise.all([
+      executeQuery(
+        () => db.stream.findFirst({
+          where: {
+            name: streamId,
+            tenantId: tenant.id,
+          },
+          include: {
+            user: true,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      ),
+      executeQuery(
+        () => db.user.findFirst({
+          where: {
+            walletAddress: wallet,
+            tenantId: tenant.id,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      )
+    ]);
 
     if (!existingStream) {
       return res.status(404).json({
@@ -845,29 +902,23 @@ export const updateStream = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // 3. Verify requesting user exists
-    const requestingUser = await db.user.findFirst({
-      where: {
-        walletAddress: wallet,
-        tenantId: tenant.id,
-      },
-    });
-
     if (!requestingUser) {
       return res.status(403).json({ error: "User not authorized." });
     }
 
-    // 4. Check permissions (host or co-host)
     const isHost = requestingUser.id === existingStream.userId;
-    const isCoHost = await db.participant.findFirst({
-      where: {
-        walletAddress: wallet,
-        streamId: existingStream.id,
-        userType: "co-host",
-        tenantId: tenant.id,
-        leftAt: null,
-      },
-    });
+    const isCoHost = await executeQuery(
+      () => db.participant.findFirst({
+        where: {
+          walletAddress: wallet,
+          streamId: existingStream.id,
+          userType: "co-host",
+          tenantId: tenant.id,
+          leftAt: null,
+        },
+      }),
+      { maxRetries: 1, timeout: 5000 }
+    );
 
     if (!isHost && !isCoHost) {
       return res.status(403).json({
@@ -875,13 +926,9 @@ export const updateStream = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // 5. Check if the stream is live
     const isLive = existingStream.isLive;
-
-    // 6. Prepare update data with strict permission rules
     const updateData: any = {};
 
-    // Title can always be updated by both roles
     if (title !== undefined) {
       if (typeof title !== "string" || title.trim().length === 0) {
         return res.status(400).json({ error: "Invalid title format." });
@@ -889,55 +936,36 @@ export const updateStream = async (req: TenantRequest, res: Response) => {
       updateData.title = title.trim();
     }
 
-    // Access permissions can be updated
     if (isPublic !== undefined) {
       updateData.isPublic = !!isPublic;
     }
 
-    // Fields that can only be updated if stream is not live
     if (!isLive) {
-      // Host can update most fields
       if (isHost) {
-        // Stream session type
         if (streamSessionType !== undefined) {
-          // Type validation - ensure streamSessionType is a valid enum value
-          if (
-            !Object.values(StreamSessionType).includes(
-              streamSessionType as StreamSessionType
-            )
-          ) {
+          if (!Object.values(StreamSessionType).includes(streamSessionType as StreamSessionType)) {
             return res.status(400).json({
               error: "Invalid streamSessionType value",
               validTypes: Object.values(StreamSessionType),
             });
           }
 
-          // Get tenant with stream type configuration
-          const tenantWithDetails = await db.tenant.findUnique({
-            where: { id: tenant.id },
-            include: { enabledStreamTypes: true },
-          });
+          const tenantWithDetails = await getTenantConfig(tenant.id);
 
           if (!tenantWithDetails) {
-            return res
-              .status(400)
-              .json({ error: "Tenant configuration not found." });
+            return res.status(400).json({ error: "Tenant configuration not found." });
           }
 
-          // Define default enabled types based on schema defaults
           const defaultEnabledTypes = {
-            enableStream: true, // Default from schema
-            enableMeeting: true, // Default from schema
-            enablePodcast: false, // Default from schema
+            enableStream: true,
+            enableMeeting: true,
+            enablePodcast: false,
           };
 
-          // Use either the stored enabledStreamTypes or the defaults
           const effectiveEnabledTypes =
             tenantWithDetails.enabledStreamTypes || defaultEnabledTypes;
 
-          // Check if the requested type is enabled
           let isEnabled = false;
-
           switch (streamSessionType as StreamSessionType) {
             case StreamSessionType.Livestream:
               isEnabled = effectiveEnabledTypes.enableStream;
@@ -951,7 +979,6 @@ export const updateStream = async (req: TenantRequest, res: Response) => {
           }
 
           if (!isEnabled) {
-            // Generate the list of allowed types
             const allowedTypes = [];
             if (effectiveEnabledTypes.enableStream) {
               allowedTypes.push(StreamSessionType.Livestream);
@@ -969,11 +996,9 @@ export const updateStream = async (req: TenantRequest, res: Response) => {
             });
           }
 
-          // If validation passes, update the stream session type
           updateData.streamSessionType = streamSessionType;
         }
 
-        // Funding type
         if (fundingType !== undefined) {
           if (!Object.values(StreamFundingType).includes(fundingType)) {
             return res.status(400).json({
@@ -984,15 +1009,11 @@ export const updateStream = async (req: TenantRequest, res: Response) => {
           updateData.fundingType = fundingType;
         }
 
-        // Schedule updates
         if (scheduledFor !== undefined) {
-          updateData.scheduledFor = scheduledFor
-            ? new Date(scheduledFor)
-            : null;
+          updateData.scheduledFor = scheduledFor ? new Date(scheduledFor) : null;
         }
       }
 
-      // Both roles can update callType if stream hasn't started
       if (callType !== undefined) {
         if (!Object.values(CallType).includes(callType)) {
           return res.status(400).json({
@@ -1009,49 +1030,51 @@ export const updateStream = async (req: TenantRequest, res: Response) => {
       fundingType !== undefined
     ) {
       return res.status(400).json({
-        error:
-          "Cannot update scheduledFor, callType, streamSessionType, or fundingType after stream has started",
+        error: "Cannot update scheduledFor, callType, streamSessionType, or fundingType after stream has started",
         currentStatus: "Stream is live",
       });
     }
 
-    // 7. Validate we have something to update
     if (Object.keys(updateData).length === 0) {
-      return res
-        .status(400)
-        .json({ error: "No valid fields provided for update." });
+      return res.status(400).json({ error: "No valid fields provided for update." });
     }
 
-    // 8. Perform the update using the stream's ID
-    const updatedStream = await db.stream.update({
-      where: {
-        id: existingStream.id,
-      },
-      data: updateData,
-    });
+    const updatedStream = await executeQuery(
+      () => db.stream.update({
+        where: {
+          id: existingStream.id,
+        },
+        data: updateData,
+      }),
+      { maxRetries: 2, timeout: 10000 }
+    );
 
+    // Invalidate cache
+    streamCache.delete(`${tenant.id}:${streamId}`);
+    streamCache.delete(`${tenant.id}:${streamId}:full`);
+
+    success = true;
     return res.status(200).json(updatedStream);
   } catch (error) {
     console.error("Error updating stream:", error);
     return res.status(500).json({
       error: "Internal server error",
     });
-  } 
-  // finally {
-  //   await db.$disconnect();
-  // }
+  } finally {
+    trackQuery(success);
+  }
 };
 
 /**
- * Controller for ending a stream
+ * Controller for ending stream - OPTIMIZED
  */
 export const endStream = async (req: TenantRequest, res: Response) => {
   const { streamId } = req.params;
   const { wallet } = req.body;
   const tenant = req.tenant;
+  let success = false;
 
   try {
-    // 1. Tenant verification
     if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
@@ -1061,26 +1084,37 @@ export const endStream = async (req: TenantRequest, res: Response) => {
     }
 
     if (!wallet || typeof wallet !== "string") {
-      return res
-        .status(400)
-        .json({ error: "Valid wallet address is required." });
+      return res.status(400).json({ error: "Valid wallet address is required." });
     }
 
     if (!isValidWalletAddress(wallet)) {
       return res.status(400).json({ error: "Invalid wallet address format." });
     }
 
-    // 2. Find the stream by name
-    const existingStream = await db.stream.findFirst({
-      where: {
-        name: streamId,
-        tenantId: tenant.id,
-        isLive: true,
-      },
-      include: {
-        user: true,
-      },
-    });
+    const [existingStream, requestingUser] = await Promise.all([
+      executeQuery(
+        () => db.stream.findFirst({
+          where: {
+            name: streamId,
+            tenantId: tenant.id,
+            isLive: true,
+          },
+          include: {
+            user: true,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      ),
+      executeQuery(
+        () => db.user.findFirst({
+          where: {
+            walletAddress: wallet,
+            tenantId: tenant.id,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      )
+    ]);
 
     if (!existingStream) {
       return res.status(404).json({
@@ -1089,19 +1123,10 @@ export const endStream = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // 3. Verify requesting user exists
-    const requestingUser = await db.user.findFirst({
-      where: {
-        walletAddress: wallet,
-        tenantId: tenant.id,
-      },
-    });
-
     if (!requestingUser) {
       return res.status(403).json({ error: "User not authorized." });
     }
 
-    // 4. Check permissions (only host can end a stream)
     const isHost = requestingUser.id === existingStream.userId;
     if (!isHost) {
       return res.status(403).json({
@@ -1109,32 +1134,37 @@ export const endStream = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // 5. Stop any active recordings
     if (existingStream.recording && existingStream.recordId) {
       try {
         const egressService = new EgressClient(
           livekitHost,
-          process.env.LIVEKIT_API_KEY,
-          process.env.LIVEKIT_API_SECRET
+          process.env.LIVEKIT_API_KEY!,
+          process.env.LIVEKIT_API_SECRET!
         );
 
         await egressService.stopEgress(existingStream.recordId);
       } catch (recordingError) {
         console.error("Error stopping recording:", recordingError);
-        // Continue with ending the stream even if stopping recording fails
       }
     }
 
-    // 6. End the stream
-    const endedStream = await db.stream.update({
-      where: { id: existingStream.id },
-      data: {
-        isLive: false,
-        endedAt: new Date(),
-        recording: false,
-      },
-    });
+    const endedStream = await executeQuery(
+      () => db.stream.update({
+        where: { id: existingStream.id },
+        data: {
+          isLive: false,
+          endedAt: new Date(),
+          recording: false,
+        },
+      }),
+      { maxRetries: 2, timeout: 10000 }
+    );
 
+    // Invalidate cache
+    streamCache.delete(`${tenant.id}:${streamId}`);
+    streamCache.delete(`${tenant.id}:${streamId}:full`);
+
+    success = true;
     return res.status(200).json({
       message: "Stream ended successfully",
       streamId: endedStream.id,
@@ -1142,9 +1172,7 @@ export const endStream = async (req: TenantRequest, res: Response) => {
       duration:
         endedStream.startedAt && endedStream.endedAt
           ? Math.floor(
-              (endedStream.endedAt.getTime() -
-                endedStream.startedAt.getTime()) /
-                1000
+              (endedStream.endedAt.getTime() - endedStream.startedAt.getTime()) / 1000
             )
           : null,
     });
@@ -1153,30 +1181,27 @@ export const endStream = async (req: TenantRequest, res: Response) => {
     return res.status(500).json({
       error: "Internal server error",
     });
-  } 
-  // finally {
-  //   await db.$disconnect();
-  // }
+  } finally {
+    trackQuery(success);
+  }
 };
 
 /**
- * Controller for starting a stream to YouTube
+ * Controller for streaming to YouTube - OPTIMIZED
  */
 export const streamToYoutube = async (req: TenantRequest, res: Response) => {
   const { roomName, wallet, youtubeRtmpUrl } = req.body;
   const tenant = req.tenant;
+  let success = false;
 
   try {
-    // 1. Tenant verification
     if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
 
-    // 2. Input validation
     if (!roomName || !wallet || typeof wallet !== "string" || !youtubeRtmpUrl) {
       return res.status(400).json({
-        error:
-          "Missing required fields: room name, wallet, or YouTube RTMP URL",
+        error: "Missing required fields: room name, wallet, or YouTube RTMP URL",
       });
     }
 
@@ -1190,36 +1215,40 @@ export const streamToYoutube = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // 3. Verify stream belongs to tenant and include user relationship
-    const stream = await db.stream.findFirst({
-      where: {
-        name: roomName,
-        tenantId: tenant.id,
-      },
-      include: {
-        user: true,
-      },
-    });
+    const [stream, user] = await Promise.all([
+      executeQuery(
+        () => db.stream.findFirst({
+          where: {
+            name: roomName,
+            tenantId: tenant.id,
+          },
+          include: {
+            user: true,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      ),
+      executeQuery(
+        () => db.user.findFirst({
+          where: {
+            walletAddress: wallet,
+            tenantId: tenant.id,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      )
+    ]);
 
     if (!stream) {
       return res.status(404).json({ error: "Stream not found." });
     }
 
-    // 4. Check if stream is already being recorded/streamed
     if (stream.recording) {
       return res.status(400).json({
         error: "Stream is already being recorded or streamed",
         recordId: stream.recordId,
       });
     }
-
-    // 5. Get user and determine user type
-    const user = await db.user.findFirst({
-      where: {
-        walletAddress: wallet,
-        tenantId: tenant.id,
-      },
-    });
 
     if (!user) {
       return res.status(403).json({ error: "User not found" });
@@ -1234,21 +1263,18 @@ export const streamToYoutube = async (req: TenantRequest, res: Response) => {
       userType = "guest";
     }
 
-    // 6. Verify user has streaming privileges
     if (userType !== "host") {
       return res.status(403).json({
         error: "Only the host can stream to YouTube.",
       });
     }
 
-    // 7. Start streaming to YouTube
     const egressService = new EgressClient(
       livekitHost,
       process.env.LIVEKIT_API_KEY || "",
       process.env.LIVEKIT_API_SECRET || ""
     );
 
-    // Create output configuration for YouTube
     const output = {
       stream: new StreamOutput({
         protocol: StreamProtocol.RTMP,
@@ -1256,27 +1282,30 @@ export const streamToYoutube = async (req: TenantRequest, res: Response) => {
       }),
     };
 
-    // Start room composite egress (streams the room composition to YouTube)
     const egressInfo = await egressService.startRoomCompositeEgress(
       roomName,
       output
     );
 
     if (!egressInfo) {
-      return res
-        .status(500)
-        .json({ error: "Failed to start YouTube stream. Please try again" });
+      return res.status(500).json({ error: "Failed to start YouTube stream. Please try again" });
     }
 
-    // Update stream record to reflect recording/streaming state
-    await db.stream.update({
-      where: { id: stream.id },
-      data: {
-        recording: true,
-        recordId: egressInfo.egressId,
-      },
-    });
+    await executeQuery(
+      () => db.stream.update({
+        where: { id: stream.id },
+        data: {
+          recording: true,
+          recordId: egressInfo.egressId,
+        },
+      }),
+      { maxRetries: 2, timeout: 10000 }
+    );
 
+    // Invalidate cache
+    streamCache.delete(`${tenant.id}:${roomName}`);
+
+    success = true;
     res.status(201).json({
       message: "YouTube streaming started",
       recordingId: egressInfo.egressId,
@@ -1288,26 +1317,24 @@ export const streamToYoutube = async (req: TenantRequest, res: Response) => {
       error: "Internal server error",
       details: error instanceof Error ? error.message : String(error),
     });
-  } 
-  // finally {
-  //   await db.$disconnect();
-  // }
+  } finally {
+    trackQuery(success);
+  }
 };
 
 /**
- * Controller for stopping a YouTube stream
+ * Controller for stopping YouTube stream - OPTIMIZED
  */
 export const stopYoutubeStream = async (req: TenantRequest, res: Response) => {
   const { recordId, wallet } = req.body;
   const tenant = req.tenant;
+  let success = false;
 
   try {
-    // 1. Tenant verification
     if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
 
-    // 2. Input validation
     if (!recordId || !wallet || typeof wallet !== "string") {
       return res.status(400).json({
         error: "Missing required fields: recordId and wallet",
@@ -1318,31 +1345,34 @@ export const stopYoutubeStream = async (req: TenantRequest, res: Response) => {
       return res.status(400).json({ error: "Invalid wallet address format." });
     }
 
-    // 3. Find the stream with this recording/streaming session
-    const stream = await db.stream.findFirst({
-      where: {
-        recordId,
-        tenantId: tenant.id,
-        recording: true,
-      },
-      include: {
-        user: true,
-      },
-    });
+    const [stream, user] = await Promise.all([
+      executeQuery(
+        () => db.stream.findFirst({
+          where: {
+            recordId,
+            tenantId: tenant.id,
+            recording: true,
+          },
+          include: {
+            user: true,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      ),
+      executeQuery(
+        () => db.user.findFirst({
+          where: {
+            walletAddress: wallet,
+            tenantId: tenant.id,
+          },
+        }),
+        { maxRetries: 2, timeout: 10000 }
+      )
+    ]);
 
     if (!stream) {
-      return res
-        .status(404)
-        .json({ error: "Active streaming session not found" });
+      return res.status(404).json({ error: "Active streaming session not found" });
     }
-
-    // 4. Verify user permissions
-    const user = await db.user.findFirst({
-      where: {
-        walletAddress: wallet,
-        tenantId: tenant.id,
-      },
-    });
 
     if (!user) {
       return res.status(403).json({ error: "User not found" });
@@ -1357,14 +1387,12 @@ export const stopYoutubeStream = async (req: TenantRequest, res: Response) => {
       userType = "guest";
     }
 
-    // 5. Verify user has streaming privileges
     if (userType !== "host") {
       return res.status(403).json({
         error: "Only the host can stop YouTube streaming.",
       });
     }
 
-    // 6. Stop the streaming
     const egressService = new EgressClient(
       livekitHost,
       process.env.LIVEKIT_API_KEY || "",
@@ -1373,14 +1401,20 @@ export const stopYoutubeStream = async (req: TenantRequest, res: Response) => {
 
     await egressService.stopEgress(recordId);
 
-    // 7. Update stream record
-    await db.stream.update({
-      where: { id: stream.id },
-      data: {
-        recording: false,
-      },
-    });
+    await executeQuery(
+      () => db.stream.update({
+        where: { id: stream.id },
+        data: {
+          recording: false,
+        },
+      }),
+      { maxRetries: 2, timeout: 10000 }
+    );
 
+    // Invalidate cache
+    streamCache.delete(`${tenant.id}:${stream.name}`);
+
+    success = true;
     res.status(200).json({
       message: "YouTube streaming stopped successfully",
       streamId: stream.id,
@@ -1392,8 +1426,26 @@ export const stopYoutubeStream = async (req: TenantRequest, res: Response) => {
       error: "Internal server error",
       details: error instanceof Error ? error.message : String(error),
     });
-  } 
-  // finally {
-  //   await db.$disconnect();
-  // }
+  } finally {
+    trackQuery(success);
+  }
 };
+
+// Periodic cache cleanup
+setInterval(() => {
+  const now = Date.now();
+  
+  // Clean stream cache
+  for (const [key, value] of streamCache.entries()) {
+    if (now - value.timestamp > STREAM_CACHE_TTL) {
+      streamCache.delete(key);
+    }
+  }
+  
+  // Clean tenant config cache
+  for (const [key, value] of tenantConfigCache.entries()) {
+    if (now - value.timestamp > TENANT_CONFIG_CACHE_TTL) {
+      tenantConfigCache.delete(key);
+    }
+  }
+}, 60000); // Clean every minute

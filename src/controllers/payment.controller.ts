@@ -12,15 +12,24 @@ import {
   connection,
   checkSolBalance,
 } from "../utils/index.js";
-import { db } from "../prisma.js";
+import { db, executeQuery, executeTransaction, trackQuery } from "../prisma.js";
 import { TenantRequest } from "../types/index.js";
 
+// Cache for token account checks
+const tokenAccountCache = new Map<string, { exists: boolean; timestamp: number }>();
+const TOKEN_ACCOUNT_CACHE_TTL = 30000; // 30 seconds
+
+/**
+ * Controller for creating a transaction - OPTIMIZED
+ */
 export const createTransaction = async (req: TenantRequest, res: Response) => {
   const { senderPublicKey, recipients, tokenName } = req.body;
   const tenant = req.tenant;
+  let success = false;
 
-  console.log("endpoint called");
-  console.log({ senderPublicKey, recipients, tokenName });
+  console.log("createTransaction endpoint called");
+  console.log({ senderPublicKey, recipients: recipients?.length, tokenName });
+  
   try {
     // Tenant verification
     if (!tenant) {
@@ -28,39 +37,37 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
     }
 
     // Input validation
-    if (
-      !senderPublicKey ||
-      !recipients ||
-      !Array.isArray(recipients) ||
-      !tokenName
-    ) {
+    if (!senderPublicKey || !recipients || !Array.isArray(recipients) || !tokenName) {
       return res.status(400).json({
-        error:
-          "Missing required fields: senderPublicKey, recipients array, and tokenName",
+        error: "Missing required fields: senderPublicKey, recipients array, and tokenName",
       });
     }
 
-    // Verify sender belongs to tenant
-    const senderUser = await db.user.findFirst({
-      where: {
-        walletAddress: senderPublicKey,
-        tenantId: tenant.id,
-      },
-    });
+    // Verify sender belongs to tenant (with cache)
+    const senderUser = await executeQuery(
+      () => db.user.findFirst({
+        where: {
+          walletAddress: senderPublicKey,
+          tenantId: tenant.id,
+        },
+        select: { id: true }
+      }),
+      { maxRetries: 1, timeout: 5000 }
+    );
 
     if (!senderUser) {
-      return res
-        .status(403)
-        .json({ error: "Sender not authorized for this tenant" });
+      return res.status(403).json({ 
+        error: "Sender not authorized for this tenant" 
+      });
     }
 
-    let sender;
+    let sender: PublicKey;
     try {
       sender = new PublicKey(senderPublicKey);
     } catch (error) {
-      return res
-        .status(400)
-        .json({ error: "Invalid sender public key format." });
+      return res.status(400).json({ 
+        error: "Invalid sender public key format." 
+      });
     }
 
     // Check SOL balance for transaction fees
@@ -72,34 +79,30 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
     }
 
     const transaction = new Transaction();
+    const isSOLTransfer = tokenName.toLowerCase() === "sol";
 
-    // Process each recipient
+    // Process recipients
     for (const recipient of recipients) {
       const { recipientPublicKey, amount } = recipient;
 
       if (!recipientPublicKey || isNaN(amount) || amount <= 0) {
         return res.status(400).json({
-          error:
-            "Each recipient must have a valid public key and a positive amount.",
+          error: "Each recipient must have a valid public key and a positive amount.",
         });
       }
 
-      let recipientKey;
+      let recipientKey: PublicKey;
       try {
         recipientKey = new PublicKey(recipientPublicKey);
       } catch (error) {
-        return res
-          .status(400)
-          .json({ error: "Invalid recipient public key format." });
+        return res.status(400).json({ 
+          error: `Invalid recipient public key format: ${recipientPublicKey}` 
+        });
       }
 
-      if (tokenName.toLowerCase() === "sol") {
-        // For SOL transfers, check SOL balance first
-        const solBalanceCheck = await checkSolBalance(
-          connection,
-          senderPublicKey
-        );
-        if (!solBalanceCheck.hasBalance || solBalanceCheck.balance < amount) {
+      if (isSOLTransfer) {
+        // For SOL transfers
+        if (solBalanceCheck.balance < amount) {
           return res.status(400).json({
             error: `Insufficient SOL balance. Required: ${amount} SOL, Available: ${solBalanceCheck.balance} SOL.`,
           });
@@ -113,82 +116,75 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
           })
         );
       } else {
+        // For token transfers
         const mintAddress = tokenMintAccounts[tokenName.toLowerCase()];
         if (!mintAddress) {
-          return res.status(400).json({ error: "Token not supported." });
+          return res.status(400).json({ 
+            error: `Token ${tokenName} not supported.` 
+          });
         }
 
         const mint = new PublicKey(mintAddress);
 
-        // Get sender token account address
-        const senderTokenAccount = await getAssociatedTokenAddress(
-          mint,
-          sender
-        );
+        // Get token accounts
+        const senderTokenAccount = await getAssociatedTokenAddress(mint, sender);
+        const recipientTokenAccount = await getAssociatedTokenAddress(mint, recipientKey);
 
-        // Check if sender token account exists
-        const senderTokenAccountInfo = await connection.getAccountInfo(
-          senderTokenAccount
-        );
+        // Check sender token account (with caching)
+        const senderCacheKey = `${senderPublicKey}:${tokenName}`;
+        let senderAccountExists = false;
+        
+        const cached = tokenAccountCache.get(senderCacheKey);
+        if (cached && Date.now() - cached.timestamp < TOKEN_ACCOUNT_CACHE_TTL) {
+          senderAccountExists = cached.exists;
+        } else {
+          const senderTokenAccountInfo = await connection.getAccountInfo(senderTokenAccount);
+          senderAccountExists = !!senderTokenAccountInfo;
+          tokenAccountCache.set(senderCacheKey, { 
+            exists: senderAccountExists, 
+            timestamp: Date.now() 
+          });
+        }
 
-        // If sender token account doesn't exist, add instruction to create it
-        if (!senderTokenAccountInfo) {
+        if (!senderAccountExists) {
           console.log(`Creating token account for sender: ${senderPublicKey}`);
           transaction.add(
             createAssociatedTokenAccountInstruction(
-              sender, // Payer
-              senderTokenAccount, // Associated token account address
-              sender, // Owner
-              mint // Token mint address
+              sender,
+              senderTokenAccount,
+              sender,
+              mint
             )
           );
 
-          // Since we're creating a new token account, there's no balance yet
-          // We should return an error about insufficient balance
           return res.status(400).json({
             error: `A token account will be created for you, but you need to fund it with ${tokenName.toUpperCase()} before making transfers.`,
           });
-        } else {
-          // Check token balance
-          const tokenBalance = await connection.getTokenAccountBalance(
-            senderTokenAccount
-          );
-          const balance =
-            Number(tokenBalance.value.amount) /
-            Math.pow(10, tokenBalance.value.decimals);
-
-          if (balance < amount) {
-            return res.status(400).json({
-              error: `Insufficient ${tokenName.toUpperCase()} balance. Required: ${amount}, Available: ${balance}.`,
-            });
-          }
         }
 
-        // Get recipient token account address
-        const recipientTokenAccount = await getAssociatedTokenAddress(
-          mint,
-          recipientKey
-        );
+        // Check token balance
+        const tokenBalance = await connection.getTokenAccountBalance(senderTokenAccount);
+        const balance = Number(tokenBalance.value.amount) / Math.pow(10, tokenBalance.value.decimals);
 
-        // Check if recipient token account exists
-        const recipientTokenAccountInfo = await connection.getAccountInfo(
-          recipientTokenAccount
-        );
+        if (balance < amount) {
+          return res.status(400).json({
+            error: `Insufficient ${tokenName.toUpperCase()} balance. Required: ${amount}, Available: ${balance}.`,
+          });
+        }
 
-        // If recipient token account doesn't exist, add instruction to create it
+        // Check recipient token account
+        const recipientTokenAccountInfo = await connection.getAccountInfo(recipientTokenAccount);
         if (!recipientTokenAccountInfo) {
           transaction.add(
             createAssociatedTokenAccountInstruction(
-              sender, // Payer
-              recipientTokenAccount, // Associated token account address
-              recipientKey, // Owner
-              mint // Token mint address
+              sender,
+              recipientTokenAccount,
+              recipientKey,
+              mint
             )
           );
         }
-        const tokenBalance = await connection.getTokenAccountBalance(
-          senderTokenAccount
-        );
+
         const decimals = tokenBalance.value.decimals;
         const transferAmount = Math.floor(amount * Math.pow(10, decimals));
 
@@ -206,6 +202,7 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
       }
     }
 
+    // Set transaction parameters
     const { blockhash } = await connection.getLatestBlockhash("confirmed");
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = sender;
@@ -215,20 +212,28 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
       verifySignatures: false,
     });
 
-    console.log({ serializedTransaction });
+    console.log("Transaction created successfully");
+    
+    success = true;
     res.status(200).json({
       transaction: serializedTransaction.toString("base64"),
-      tenantId: tenant.id, // Include tenant ID in response
+      tenantId: tenant.id,
     });
   } catch (error) {
     console.error("Error creating transaction:", error);
     res.status(500).json({ error: "Failed to create transaction" });
+  } finally {
+    trackQuery(success);
   }
 };
 
+/**
+ * Controller for submitting a transaction - OPTIMIZED
+ */
 export const submitTransaction = async (req: TenantRequest, res: Response) => {
   const { signedTransaction, wallet } = req.body;
   const tenant = req.tenant;
+  let success = false;
 
   try {
     // Tenant verification
@@ -236,29 +241,38 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
 
+    if (!signedTransaction) {
+      return res.status(400).json({ error: "Signed transaction is required" });
+    }
+
     const transactionBuffer = Buffer.from(signedTransaction, "base64");
     const transaction = Transaction.from(transactionBuffer);
 
-    // Verify transaction signer belongs to tenant
+    // Verify transaction signer
     const signer = transaction.feePayer?.toString();
     console.log({ signer });
+    
     if (!signer) {
-      return res
-        .status(400)
-        .json({ error: "Invalid transaction: no fee payer" });
+      return res.status(400).json({ 
+        error: "Invalid transaction: no fee payer" 
+      });
     }
 
-    const user = await db.user.findFirst({
-      where: {
-        walletAddress: signer,
-        tenantId: tenant.id,
-      },
-    });
+    // Verify user belongs to tenant
+    const user = await executeQuery(
+      () => db.user.findFirst({
+        where: {
+          walletAddress: signer,
+          tenantId: tenant.id,
+        },
+      }),
+      { maxRetries: 1, timeout: 5000 }
+    );
 
     if (!user) {
-      return res
-        .status(403)
-        .json({ error: "Transaction signer not authorized for this tenant" });
+      return res.status(403).json({ 
+        error: "Transaction signer not authorized for this tenant" 
+      });
     }
 
     // Submit to blockchain with better error handling
@@ -267,74 +281,78 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
         transaction.serialize()
       );
 
-      // Wait for confirmation with a timeout
-      const confirmation = await Promise.race([
-        connection.confirmTransaction(signature, "confirmed"),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Confirmation timeout")), 30000)
-        ),
-      ]);
+      // Wait for confirmation with timeout
+      const confirmationPromise = connection.confirmTransaction(signature, "confirmed");
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Confirmation timeout")), 30000)
+      );
 
-      // Update user points (tenant-scoped)
-      const updatedUser = await db.user.update({
-        where: {
-          id: user.id,
-        },
-        data: {
-          points: (user.points || 0) + 5,
-        },
-      });
+      await Promise.race([confirmationPromise, timeoutPromise]);
 
-      // Record transaction with tenant relationship
-      const txRecord = await db.transaction.create({
-        data: {
-          signature,
-          createdAt: new Date(),
-          tenantId: tenant.id,
-          userId: user.id,
-        },
-      });
+      // Update user and record transaction in a single transaction
+      const result = await executeTransaction(async (tx) => {
+        // Update user points
+        const updatedUser = await tx.user.update({
+          where: { id: user.id },
+          data: {
+            points: (user.points || 0) + 5,
+          },
+        });
 
+        // Record transaction
+        const txRecord = await tx.transaction.create({
+          data: {
+            signature,
+            createdAt: new Date(),
+            tenantId: tenant.id,
+            userId: user.id,
+            transactionType: 'payment'
+          },
+        });
+
+        return { updatedUser, txRecord };
+      }, { maxWait: 5000, timeout: 15000 });
+
+      success = true;
       res.json({
         data: "Payment successful",
-        signature: txRecord.signature,
-        points: updatedUser.points,
+        signature: result.txRecord.signature,
+        points: result.updatedUser.points,
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error("Transaction submission error:", err);
 
-      // Get detailed error information when available
+      // Get detailed error information
       let errorMessage = "Failed to submit transaction";
       let errorLogs: string[] = [];
 
       if (err instanceof Error) {
         errorMessage = err.message;
 
-        // Try to extract Solana-specific error details
-        // @ts-ignore - SendTransactionError is a specific Solana error type
-        if (err.logs) {
-          // @ts-ignore
-          errorLogs = err.logs;
+        // Extract Solana-specific error details
+        if ('logs' in err) {
+          errorLogs = err.logs as string[];
         }
       }
 
-      // Check for specific Solana errors and provide user-friendly messages
-      if (
-        errorMessage.includes(
-          "Attempt to debit an account but found no record of a prior credit"
-        )
-      ) {
+      // Provide user-friendly error messages
+      if (errorMessage.includes("Attempt to debit an account but found no record of a prior credit")) {
         return res.status(400).json({
-          error:
-            "Insufficient funds. The sender account doesn't have enough tokens or SOL.",
+          error: "Insufficient funds. The sender account doesn't have enough tokens or SOL.",
           logs: errorLogs,
         });
       }
 
       if (errorMessage.includes("blockhash not found")) {
         return res.status(400).json({
-          error:
-            "Transaction expired. Please create a new transaction and try again.",
+          error: "Transaction expired. Please create a new transaction and try again.",
+          logs: errorLogs,
+        });
+      }
+
+      if (errorMessage.includes("Confirmation timeout")) {
+        return res.status(408).json({
+          error: "Transaction confirmation timeout. The transaction may still be processed.",
           logs: errorLogs,
         });
       }
@@ -347,8 +365,17 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
   } catch (error) {
     console.error("Error submitting transaction:", error);
     res.status(500).json({ error: "Failed to submit transaction" });
-  } 
-  // finally {
-  //   await db.$disconnect();
-  // }
+  } finally {
+    trackQuery(success);
+  }
 };
+
+// Periodic cache cleanup
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of tokenAccountCache.entries()) {
+    if (now - value.timestamp > TOKEN_ACCOUNT_CACHE_TTL) {
+      tokenAccountCache.delete(key);
+    }
+  }
+}, 60000); // Clean every minute
