@@ -5,8 +5,8 @@ import { TenantRequest } from "../types/index.js";
 
 // Cache configuration
 const CACHE_TTL = parseInt(process.env.AUTH_CACHE_TTL || '300000'); // 5 minutes
-const CACHE_MAX_SIZE = parseInt(process.env.AUTH_CACHE_MAX_SIZE || '500'); // Reduced for Railway
-const UPDATE_BATCH_SIZE = parseInt(process.env.UPDATE_BATCH_SIZE || '5'); // Smaller batches
+const CACHE_MAX_SIZE = parseInt(process.env.AUTH_CACHE_MAX_SIZE || '500');
+const UPDATE_BATCH_SIZE = parseInt(process.env.UPDATE_BATCH_SIZE || '5');
 const UPDATE_INTERVAL = parseInt(process.env.UPDATE_INTERVAL || '15000'); // 15 seconds
 
 // Simple but efficient LRU cache
@@ -157,12 +157,19 @@ const updateQueue = new UpdateQueue();
 
 /**
  * Optimized authentication middleware for Prisma 6.5.0
+ * CRITICAL: Skip authentication for OPTIONS requests to allow CORS preflight
  */
 export const authenticateTenant = async (
   req: TenantRequest,
   res: Response,
   next: NextFunction
 ) => {
+  // CRITICAL: Skip authentication for OPTIONS requests (CORS preflight)
+  // OPTIONS requests should be handled by the CORS middleware
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+  
   const startTime = Date.now();
   let success = false;
   
@@ -192,7 +199,6 @@ export const authenticateTenant = async (
     }
 
     // Cache miss - query database
-    // Note: Using findUnique with Prisma 6.5.0 should work fine
     const apiToken = await executeQuery(
       async () => {
         return await db.apiToken.findUnique({

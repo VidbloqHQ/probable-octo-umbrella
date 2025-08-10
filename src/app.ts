@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import { createServer } from "http";
-import cors from "cors";
+// Remove the cors import since we're not using it anymore
+// import cors from "cors";
 import {
   TenantRouter,
   UserRouter,
@@ -26,12 +27,68 @@ const MAX_REQUEST_TIMEOUT = parseInt(process.env.MAX_REQUEST_TIMEOUT || '30000')
 
 export const wss = createSocketServer(httpServer);
 
-// Body parser configuration
+// Trust proxy (important for Railway/Render/Heroku) - MUST BE FIRST
+app.set('trust proxy', true);
+
+// ============================================
+// CUSTOM CORS MIDDLEWARE - MUST BE FIRST!
+// ============================================
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const origin = req.headers.origin as string;
+  
+  // Get allowed origins from environment or use defaults
+  const allowedOrigins = process.env.ALLOWED_ORIGINS 
+    ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+    : [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'https://thestreamlink.com',
+      'https://www.thestreamlink.com'
+    ];
+  
+  // In development, allow all origins
+  if (process.env.NODE_ENV === 'development') {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  } else if (!origin) {
+    // Allow requests with no origin (mobile apps, Postman, server-to-server)
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  } else if (allowedOrigins.includes(origin)) {
+    // Production: only allow whitelisted origins
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else {
+    // Log unrecognized origins but still allow them (you can change this to block)
+    console.log(`CORS: Unrecognized origin: ${origin}`);
+    res.setHeader('Access-Control-Allow-Origin', origin); // Change to block if needed
+  }
+  
+  // Set all CORS headers
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, x-api-secret, X-Requested-With, Accept, Origin, Access-Control-Request-Method, Access-Control-Request-Headers');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+  res.setHeader('Access-Control-Expose-Headers', 'x-request-id, X-Total-Count, X-Page, X-Per-Page');
+  
+  // Handle OPTIONS method (preflight)
+  if (req.method === 'OPTIONS') {
+    // Preflight request. Reply successfully:
+    res.sendStatus(204);
+    return;
+  }
+  
+  next();
+});
+
+// Body parser configuration - AFTER CORS
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Trust proxy (important for Railway/Render/Heroku)
-app.set('trust proxy', true);
+// Request ID middleware for tracing
+app.use((req: Request, res: Response, next) => {
+  req.id = req.headers['x-request-id'] as string || 
+           `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  res.setHeader('x-request-id', req.id);
+  next();
+});
 
 // Health check endpoint (no auth required)
 app.get('/health', async (req: Request, res: Response) => {
@@ -68,31 +125,7 @@ app.get('/ready', async (req: Request, res: Response) => {
   res.status(isReady ? 200 : 503).json({ ready: isReady });
 });
 
-// CORS configuration
-const corsOptions = {
-  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    // In production, you might want to validate against a whitelist
-    if (process.env.ALLOWED_ORIGINS) {
-      const allowedOrigins = process.env.ALLOWED_ORIGINS.split(',');
-      if (origin && !allowedOrigins.includes(origin)) {
-        callback(new Error('Not allowed by CORS'));
-        return;
-      }
-    }
-    callback(null, true);
-  },
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "x-api-key",
-    "x-api-secret",
-    "Authorization",
-  ],
-  credentials: true,
-  maxAge: 86400,
-};
-
-app.use(cors(corsOptions));
+// Apply beacon handler
 app.use(beaconHandler);
 
 // Request logging middleware
@@ -139,14 +172,6 @@ app.use((req: Request, res: Response, next) => {
   next();
 });
 
-// Request ID middleware for tracing
-app.use((req: Request, res: Response, next) => {
-  req.id = req.headers['x-request-id'] as string || 
-           `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  res.setHeader('x-request-id', req.id);
-  next();
-});
-
 // Delay participant reconciliation startup
 let reconciliationJob: any = null;
 setTimeout(() => {
@@ -154,10 +179,10 @@ setTimeout(() => {
   reconciliationJob = startEnhancedReconciliationJob();
 }, process.env.RECONCILIATION_DELAY ? parseInt(process.env.RECONCILIATION_DELAY) : 10000);
 
-// Public routes
+// Public routes (no authentication required)
 app.use("/tenant", TenantRouter.default);
 
-// Protected routes
+// Protected routes - authenticateTenant middleware should skip OPTIONS requests
 app.use(authenticateTenant);
 app.use("/tenant/me", TenantMeRouter.default);
 app.use("/user", UserRouter.default);
@@ -177,7 +202,7 @@ app.all("*", (req: Request, res: Response) => {
   });
 });
 
-// Global error handler
+// Global error handler - MUST BE LAST
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   const requestId = (req as any).id;
   console.error(`[${requestId}] Unhandled error:`, err);
@@ -200,15 +225,6 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
       error: "Database connection error",
       code: "DB_CONNECTION_ERROR",
       message: "Unable to connect to the database. Please try again.",
-      requestId
-    });
-  }
-  
-  // CORS errors
-  if (err.message === 'Not allowed by CORS') {
-    return res.status(403).json({
-      error: "CORS policy violation",
-      code: "CORS_ERROR",
       requestId
     });
   }
@@ -307,6 +323,8 @@ httpServer.listen(PORT, () => {
   if (!process.env.DATABASE_URL) {
     console.warn('⚠️  WARNING: No DATABASE_URL environment variable set');
   }
+  
+  console.log('CORS: Allowed origins:', process.env.ALLOWED_ORIGINS || 'All origins (dev mode)');
 });
 
 // Add TypeScript declaration for request ID
