@@ -1,9 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -87,7 +84,7 @@ model Tenant {
 model ApiToken {
   id          String    @id @default(cuid())
   key         String    @unique  // Public API key for identification
-  secret      String    @unique  // Secret key (hashed) for authentication
+  secret      String    // Secret key (hashed) for authentication
   name        String    // A descriptive name for the token
   tenantId    String
   createdAt   DateTime  @default(now())
@@ -96,6 +93,11 @@ model ApiToken {
   isActive    Boolean   @default(true)
   
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  // CRITICAL: Add these indexes for authentication performance
+  @@index([key])
+  @@index([key, tenantId])
+  @@index([tenantId])
 }
 
 model AuthorizedDomain {
@@ -130,6 +132,7 @@ model User {
   
   @@unique([walletAddress, tenantId]) // Wallet addresses must be unique within a tenant
   @@index([tenantId, email])
+  @@index([walletAddress, tenantId]) // Add composite index for faster lookups
 }
 
 model Account {
@@ -180,6 +183,7 @@ model Stream {
   
   @@unique([name, tenantId]) // Names must be unique within a tenant
   @@index([tenantId, userId])
+  @@index([name, tenantId]) // Add composite index for stream lookups
 }
 
 model EnabledStreamTypes {
@@ -366,6 +370,7 @@ model Participant {
   responses     ParticipantResponse[]
   
   @@index([tenantId, streamId])
+  @@index([walletAddress, streamId, tenantId]) // Add composite index for participant lookups
 }
 
 model ProgramStream {

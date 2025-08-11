@@ -1,3 +1,7 @@
+// import { Response, NextFunction } from "express";
+// import * as bcrypt from "bcryptjs";
+// import { db, executeQuery, trackQuery } from "../prisma.js";
+// import { TenantRequest } from "../types/index.js";
 import * as bcrypt from "bcryptjs";
 import { db, executeQuery, trackQuery } from "../prisma.js";
 // Cache configuration
@@ -120,13 +124,40 @@ class UpdateQueue {
     }
 }
 const updateQueue = new UpdateQueue();
+// Request coalescing to prevent thundering herd
+class RequestCoalescer {
+    inFlight = new Map();
+    async coalesce(key, fn) {
+        // If there's already a request in flight for this key, wait for it
+        const existing = this.inFlight.get(key);
+        if (existing) {
+            return existing;
+        }
+        // Start new request and store the promise
+        const promise = fn().finally(() => {
+            // Clean up after request completes
+            this.inFlight.delete(key);
+        });
+        this.inFlight.set(key, promise);
+        return promise;
+    }
+    getStats() {
+        return {
+            inFlightRequests: this.inFlight.size,
+            keys: Array.from(this.inFlight.keys())
+        };
+    }
+}
+const requestCoalescer = new RequestCoalescer();
+// Token validation cache (stores validation results temporarily)
+const validationCache = new Map();
+const VALIDATION_CACHE_TTL = 5000; // 5 seconds for failed attempts
 /**
  * Optimized authentication middleware for Prisma 6.5.0
  * CRITICAL: Skip authentication for OPTIONS requests to allow CORS preflight
  */
 export const authenticateTenant = async (req, res, next) => {
     // CRITICAL: Skip authentication for OPTIONS requests (CORS preflight)
-    // OPTIONS requests should be handled by the CORS middleware
     if (req.method === 'OPTIONS') {
         return next();
     }
@@ -141,97 +172,155 @@ export const authenticateTenant = async (req, res, next) => {
                 code: "MISSING_CREDENTIALS"
             });
         }
-        // Try cache first
         const cacheKey = `${apiKey}:${apiSecret}`;
+        // Check validation cache for recent failures
+        const validationEntry = validationCache.get(cacheKey);
+        if (validationEntry && Date.now() - validationEntry.timestamp < VALIDATION_CACHE_TTL) {
+            if (!validationEntry.valid) {
+                return res.status(401).json({
+                    error: "Invalid API credentials",
+                    code: "INVALID_CREDENTIALS_CACHED"
+                });
+            }
+        }
+        // Try cache first
         const cached = tokenCache.get(cacheKey);
         if (cached) {
             req.tenant = cached.tenant;
             // Queue update (non-blocking)
             updateQueue.add(cached.tokenId);
             success = true;
+            // Log if even cache hit is slow
+            const elapsed = Date.now() - startTime;
+            if (elapsed > 100) {
+                console.warn(`Slow cache hit: ${elapsed}ms for key ${apiKey.substring(0, 8)}...`);
+            }
             return next();
         }
-        // Cache miss - query database
-        const apiToken = await executeQuery(async () => {
-            return await db.apiToken.findUnique({
-                where: { key: apiKey },
-                select: {
-                    id: true,
-                    secret: true,
-                    isActive: true,
-                    expiresAt: true,
-                    tenant: {
+        // Use request coalescing to prevent multiple DB queries for same key
+        try {
+            const result = await requestCoalescer.coalesce(cacheKey, async () => {
+                // Check cache again in case another request populated it
+                const recheckedCache = tokenCache.get(cacheKey);
+                if (recheckedCache) {
+                    return recheckedCache;
+                }
+                // Cache miss - query database
+                const apiToken = await executeQuery(async () => {
+                    return await db.apiToken.findUnique({
+                        where: { key: apiKey },
                         select: {
                             id: true,
-                            creatorWallet: true,
-                            createdAt: true,
-                            updatedAt: true,
-                            theme: true,
-                            primaryColor: true,
-                            secondaryColor: true,
-                            accentColor: true,
-                            textPrimaryColor: true,
-                            textSecondaryColor: true,
-                            logo: true,
-                            shortLogo: true,
-                            name: true,
-                            templateId: true,
-                            rpcEndpoint: true,
-                            networkCluster: true,
-                            defaultStreamType: true,
-                            defaultFundingType: true,
+                            secret: true,
+                            isActive: true,
+                            expiresAt: true,
+                            tenant: {
+                                select: {
+                                    id: true,
+                                    creatorWallet: true,
+                                    createdAt: true,
+                                    updatedAt: true,
+                                    theme: true,
+                                    primaryColor: true,
+                                    secondaryColor: true,
+                                    accentColor: true,
+                                    textPrimaryColor: true,
+                                    textSecondaryColor: true,
+                                    logo: true,
+                                    shortLogo: true,
+                                    name: true,
+                                    templateId: true,
+                                    rpcEndpoint: true,
+                                    networkCluster: true,
+                                    defaultStreamType: true,
+                                    defaultFundingType: true,
+                                }
+                            }
                         }
-                    }
+                    });
+                }, {
+                    maxRetries: 1, // Reduce retries to fail faster
+                    timeout: 5000 // Reduced timeout
+                });
+                if (!apiToken) {
+                    // Cache the failure
+                    validationCache.set(cacheKey, { valid: false, timestamp: Date.now() });
+                    throw new Error("INVALID_KEY");
                 }
+                if (!apiToken.isActive) {
+                    validationCache.set(cacheKey, { valid: false, timestamp: Date.now() });
+                    throw new Error("KEY_REVOKED");
+                }
+                if (apiToken.expiresAt && new Date(apiToken.expiresAt) < new Date()) {
+                    validationCache.set(cacheKey, { valid: false, timestamp: Date.now() });
+                    throw new Error("KEY_EXPIRED");
+                }
+                // Verify secret (this is CPU-bound, not I/O bound)
+                const validSecret = await bcrypt.compare(apiSecret, apiToken.secret);
+                if (!validSecret) {
+                    validationCache.set(cacheKey, { valid: false, timestamp: Date.now() });
+                    throw new Error("INVALID_SECRET");
+                }
+                // Prepare result for caching
+                const cacheData = {
+                    tokenId: apiToken.id,
+                    tenant: apiToken.tenant
+                };
+                // Cache successful authentication
+                tokenCache.set(cacheKey, cacheData);
+                // Clear validation cache on success
+                validationCache.delete(cacheKey);
+                return cacheData;
             });
-        }, { maxRetries: 2, timeout: 10000 });
-        if (!apiToken) {
-            return res.status(401).json({
-                error: "Invalid API key",
-                code: "INVALID_KEY"
-            });
+            // Queue lastUsedAt update
+            updateQueue.add(result.tokenId);
+            // Attach tenant to request
+            req.tenant = result.tenant;
+            success = true;
+            // Log slow queries
+            const elapsed = Date.now() - startTime;
+            if (elapsed > 1000) {
+                console.warn(`Slow auth query: ${elapsed}ms for key ${apiKey.substring(0, 8)}...`);
+            }
+            next();
         }
-        if (!apiToken.isActive) {
-            return res.status(401).json({
-                error: "API key has been revoked",
-                code: "KEY_REVOKED"
-            });
+        catch (error) {
+            // Handle specific errors from coalescing
+            if (error.message === 'INVALID_KEY') {
+                return res.status(401).json({
+                    error: "Invalid API key",
+                    code: "INVALID_KEY"
+                });
+            }
+            if (error.message === 'KEY_REVOKED') {
+                return res.status(401).json({
+                    error: "API key has been revoked",
+                    code: "KEY_REVOKED"
+                });
+            }
+            if (error.message === 'KEY_EXPIRED') {
+                return res.status(401).json({
+                    error: "API key has expired",
+                    code: "KEY_EXPIRED"
+                });
+            }
+            if (error.message === 'INVALID_SECRET') {
+                return res.status(401).json({
+                    error: "Invalid API credentials",
+                    code: "INVALID_SECRET"
+                });
+            }
+            // Re-throw for outer catch block
+            throw error;
         }
-        if (apiToken.expiresAt && new Date(apiToken.expiresAt) < new Date()) {
-            return res.status(401).json({
-                error: "API key has expired",
-                code: "KEY_EXPIRED"
-            });
-        }
-        // Verify secret
-        const validSecret = await bcrypt.compare(apiSecret, apiToken.secret);
-        if (!validSecret) {
-            return res.status(401).json({
-                error: "Invalid API credentials",
-                code: "INVALID_SECRET"
-            });
-        }
-        // Cache successful authentication
-        tokenCache.set(cacheKey, {
-            tokenId: apiToken.id,
-            tenant: apiToken.tenant
-        });
-        // Queue lastUsedAt update
-        updateQueue.add(apiToken.id);
-        // Attach tenant to request
-        req.tenant = apiToken.tenant;
-        success = true;
-        // Log slow queries in development
-        const elapsed = Date.now() - startTime;
-        if (elapsed > 1000) {
-            console.warn(`Slow auth query: ${elapsed}ms for key ${apiKey.substring(0, 8)}...`);
-        }
-        next();
     }
     catch (error) {
         console.error('Auth error:', error);
         // Track failed query
         trackQuery(false);
+        // Log the time even for failures
+        const elapsed = Date.now() - startTime;
+        console.error(`Auth failed after ${elapsed}ms for key ${req.headers["x-api-key"]?.toString().substring(0, 8)}...`);
         // Specific error handling
         if (error.code === 'P2024') {
             return res.status(503).json({
@@ -269,20 +358,36 @@ export function getAuthStats() {
     return {
         cache: tokenCache.getStats(),
         updateQueue: updateQueue.getStats(),
+        requestCoalescer: requestCoalescer.getStats(),
+        validationCache: {
+            size: validationCache.size,
+            entries: Array.from(validationCache.keys()).map(k => k.split(':')[0].substring(0, 8) + '...')
+        },
         config: {
             cacheTTL: CACHE_TTL,
             cacheMaxSize: CACHE_MAX_SIZE,
             updateBatchSize: UPDATE_BATCH_SIZE,
-            updateInterval: UPDATE_INTERVAL
+            updateInterval: UPDATE_INTERVAL,
+            validationCacheTTL: VALIDATION_CACHE_TTL
         }
     };
 }
 // Clear cache (for emergencies or testing)
 export function clearAuthCache() {
     tokenCache.clear();
+    validationCache.clear();
     console.log('Authentication cache cleared');
 }
 // Force flush update queue
 export async function flushUpdateQueue() {
     await updateQueue.flush();
 }
+// Periodic cleanup of validation cache
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, value] of validationCache.entries()) {
+        if (now - value.timestamp > VALIDATION_CACHE_TTL) {
+            validationCache.delete(key);
+        }
+    }
+}, 30000); // Clean every 30 seconds
