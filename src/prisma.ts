@@ -8,8 +8,8 @@ const prismaClientSingleton = () => {
   
   console.log('Initializing Prisma Client', {
     environment: process.env.NODE_ENV || 'development',
-    pooler: process.env.DATABASE_URL?.includes('pgbouncer=true') ? 'PgBouncer' : 'Direct',
-    connectionLimit: process.env.DATABASE_CONNECTION_LIMIT || '40'
+    connectionType: 'Session Pooler',
+    connectionLimit: process.env.DATABASE_CONNECTION_LIMIT || '50'
   });
 
   return new PrismaClient({
