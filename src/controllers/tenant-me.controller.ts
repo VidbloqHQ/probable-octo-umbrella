@@ -360,17 +360,18 @@ export const addAuthorizedDomain = async (req: TenantRequest, res: Response) => 
       return res.status(400).json({ error: "Domain is required" });
     }
 
-    // Normalize domain (remove protocol if present)
+    // Normalize domain (remove protocol if present but KEEP subdomains)
     let normalizedDomain = domain.trim().toLowerCase();
     
     // Remove protocol if present
     normalizedDomain = normalizedDomain
       .replace(/^https?:\/\//, '')
-      .replace(/^www\./, '')
       .replace(/\/$/, ''); // Remove trailing slash
     
+    // DON'T remove www. or other subdomains - they should be treated as different domains
+    
     // Validate domain format
-    const domainRegex = /^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}(:[0-9]+)?$/;
+    const domainRegex = /^([a-z0-9]+(-[a-z0-9]+)*\.)*[a-z0-9]+(-[a-z0-9]+)*(\.[a-z]{2,})(:[0-9]+)?$/;
     const isLocalhost = normalizedDomain.includes('localhost') || 
                        normalizedDomain.includes('127.0.0.1') ||
                        normalizedDomain.includes('::1');
@@ -508,11 +509,11 @@ export const bulkAddAuthorizedDomains = async (req: TenantRequest, res: Response
 
     for (const domain of domains) {
       try {
-        // Normalize domain
+        // Normalize domain (KEEP subdomains)
         let normalizedDomain = domain.trim().toLowerCase()
           .replace(/^https?:\/\//, '')
-          .replace(/^www\./, '')
           .replace(/\/$/, '');
+        // DON'T remove www. - treat as separate domain
 
         // Check if already exists
         const existing = await executeQuery(
