@@ -153,7 +153,7 @@ const requestCoalescer = new RequestCoalescer();
 const validationCache = new Map();
 const VALIDATION_CACHE_TTL = 5000; // 5 seconds for failed attempts
 /**
- * Optimized authentication middleware for Prisma 6.5.0
+ * Optimized authentication middleware
  * CRITICAL: Skip authentication for OPTIONS requests to allow CORS preflight
  */
 export const authenticateTenant = async (req, res, next) => {
@@ -205,7 +205,8 @@ export const authenticateTenant = async (req, res, next) => {
                 if (recheckedCache) {
                     return recheckedCache;
                 }
-                // Cache miss - query database
+                // OPTIMIZED: Split the query into two parts
+                // First, do a lightweight query to validate the token
                 const apiToken = await executeQuery(async () => {
                     return await db.apiToken.findUnique({
                         where: { key: apiKey },
@@ -214,33 +215,12 @@ export const authenticateTenant = async (req, res, next) => {
                             secret: true,
                             isActive: true,
                             expiresAt: true,
-                            tenant: {
-                                select: {
-                                    id: true,
-                                    creatorWallet: true,
-                                    createdAt: true,
-                                    updatedAt: true,
-                                    theme: true,
-                                    primaryColor: true,
-                                    secondaryColor: true,
-                                    accentColor: true,
-                                    textPrimaryColor: true,
-                                    textSecondaryColor: true,
-                                    logo: true,
-                                    shortLogo: true,
-                                    name: true,
-                                    templateId: true,
-                                    rpcEndpoint: true,
-                                    networkCluster: true,
-                                    defaultStreamType: true,
-                                    defaultFundingType: true,
-                                }
-                            }
+                            tenantId: true, // Just get the ID first
                         }
                     });
                 }, {
-                    maxRetries: 1, // Reduce retries to fail faster
-                    timeout: 5000 // Reduced timeout
+                    maxRetries: 2,
+                    timeout: 10000 // 10 second timeout
                 });
                 if (!apiToken) {
                     // Cache the failure
@@ -261,10 +241,42 @@ export const authenticateTenant = async (req, res, next) => {
                     validationCache.set(cacheKey, { valid: false, timestamp: Date.now() });
                     throw new Error("INVALID_SECRET");
                 }
+                // Only after validation passes, fetch the full tenant data
+                const tenant = await executeQuery(async () => {
+                    return await db.tenant.findUnique({
+                        where: { id: apiToken.tenantId },
+                        select: {
+                            id: true,
+                            creatorWallet: true,
+                            createdAt: true,
+                            updatedAt: true,
+                            theme: true,
+                            primaryColor: true,
+                            secondaryColor: true,
+                            accentColor: true,
+                            textPrimaryColor: true,
+                            textSecondaryColor: true,
+                            logo: true,
+                            shortLogo: true,
+                            name: true,
+                            templateId: true,
+                            rpcEndpoint: true,
+                            networkCluster: true,
+                            defaultStreamType: true,
+                            defaultFundingType: true,
+                        }
+                    });
+                }, {
+                    maxRetries: 2,
+                    timeout: 10000
+                });
+                if (!tenant) {
+                    throw new Error("TENANT_NOT_FOUND");
+                }
                 // Prepare result for caching
                 const cacheData = {
                     tokenId: apiToken.id,
-                    tenant: apiToken.tenant
+                    tenant: tenant
                 };
                 // Cache successful authentication
                 tokenCache.set(cacheKey, cacheData);
@@ -308,6 +320,12 @@ export const authenticateTenant = async (req, res, next) => {
                 return res.status(401).json({
                     error: "Invalid API credentials",
                     code: "INVALID_SECRET"
+                });
+            }
+            if (error.message === 'TENANT_NOT_FOUND') {
+                return res.status(404).json({
+                    error: "Tenant not found",
+                    code: "TENANT_NOT_FOUND"
                 });
             }
             // Re-throw for outer catch block
