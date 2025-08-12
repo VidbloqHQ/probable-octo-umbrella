@@ -1,12 +1,10 @@
 import express from "express";
 import { createServer } from "http";
-// Remove the cors import since we're not using it anymore
-// import cors from "cors";
 import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
-import { isDatabaseHealthy, getDatabaseMetrics } from "./prisma.js";
+import { isDatabaseHealthy, getDatabaseMetrics, db, executeQuery } from "./prisma.js";
 import { getAuthStats } from "./middlewares/tenant-auth.middleware.js";
 const app = express();
 const PORT = process.env.PORT || 8001;
@@ -16,35 +14,123 @@ export const wss = createSocketServer(httpServer);
 // Trust proxy (important for Railway/Render/Heroku) - MUST BE FIRST
 app.set('trust proxy', true);
 // ============================================
+// DYNAMIC CORS WITH AUTHORIZED DOMAINS
+// ============================================
+// Cache for authorized domains (refreshed periodically)
+const authorizedDomainsCache = new Map();
+let lastCacheRefresh = 0;
+const CACHE_REFRESH_INTERVAL = 60000; // Refresh every minute
+/**
+ * Refresh the authorized domains cache
+ */
+async function refreshAuthorizedDomainsCache() {
+    try {
+        const domains = await executeQuery(() => db.authorizedDomain.findMany({
+            select: {
+                domain: true,
+                tenantId: true
+            }
+        }), { maxRetries: 1, timeout: 5000 });
+        // Clear and rebuild cache
+        authorizedDomainsCache.clear();
+        for (const { domain, tenantId } of domains) {
+            if (!authorizedDomainsCache.has(tenantId)) {
+                authorizedDomainsCache.set(tenantId, new Set());
+            }
+            authorizedDomainsCache.get(tenantId).add(domain);
+        }
+        lastCacheRefresh = Date.now();
+        console.log(`Authorized domains cache refreshed: ${domains.length} domains for ${authorizedDomainsCache.size} tenants`);
+    }
+    catch (error) {
+        console.error('Failed to refresh authorized domains cache:', error);
+    }
+}
+// Initial cache load (delayed to allow database to be ready)
+setTimeout(refreshAuthorizedDomainsCache, 5000);
+// Periodic cache refresh
+setInterval(refreshAuthorizedDomainsCache, CACHE_REFRESH_INTERVAL);
+/**
+ * Extract origin without protocol for comparison
+ */
+function normalizeOrigin(origin) {
+    try {
+        const url = new URL(origin);
+        return url.hostname;
+    }
+    catch {
+        return origin;
+    }
+}
+/**
+ * Check if an origin is authorized for any tenant
+ */
+function isOriginAuthorized(origin) {
+    const normalizedOrigin = normalizeOrigin(origin);
+    // Check all tenants' authorized domains
+    for (const domains of authorizedDomainsCache.values()) {
+        if (domains.has(normalizedOrigin)) {
+            return true;
+        }
+    }
+    return false;
+}
+// ============================================
 // CUSTOM CORS MIDDLEWARE - MUST BE FIRST!
 // ============================================
 app.use((req, res, next) => {
     const origin = req.headers.origin;
-    // Get allowed origins from environment or use defaults
-    const allowedOrigins = process.env.ALLOWED_ORIGINS
-        ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
-        : [
-            'http://localhost:3000',
-            'http://localhost:3001',
-            'https://thestreamlink.com',
-            'https://www.thestreamlink.com'
-        ];
-    // In development, allow all origins
+    // Development mode: Allow all origins
     if (process.env.NODE_ENV === 'development') {
         res.setHeader('Access-Control-Allow-Origin', origin || '*');
     }
+    // No origin header (server-to-server, mobile apps, Postman)
     else if (!origin) {
-        // Allow requests with no origin (mobile apps, Postman, server-to-server)
         res.setHeader('Access-Control-Allow-Origin', '*');
     }
-    else if (allowedOrigins.includes(origin)) {
-        // Production: only allow whitelisted origins
-        res.setHeader('Access-Control-Allow-Origin', origin);
-    }
+    // Check against authorized domains
     else {
-        // Log unrecognized origins but still allow them (you can change this to block)
-        console.log(`CORS: Unrecognized origin: ${origin}`);
-        res.setHeader('Access-Control-Allow-Origin', origin); // Change to block if needed
+        // Check if it's localhost (for development)
+        const isLocalhost = origin.includes('localhost') ||
+            origin.includes('127.0.0.1') ||
+            origin.includes('::1');
+        // Allow localhost if configured
+        if (isLocalhost && process.env.ALLOW_LOCALHOST === 'true') {
+            res.setHeader('Access-Control-Allow-Origin', origin);
+        }
+        // Check if origin is in any tenant's authorized domains
+        else if (isOriginAuthorized(origin)) {
+            res.setHeader('Access-Control-Allow-Origin', origin);
+        }
+        // Check against your admin/dashboard domains (if you have any)
+        else {
+            // Your own admin dashboard domains (if applicable)
+            const adminDomains = process.env.ADMIN_DOMAINS
+                ? process.env.ADMIN_DOMAINS.split(',').map(o => o.trim())
+                : [
+                // Add your admin dashboard domain here if you have one
+                // 'https://admin.yourservice.com',
+                // 'https://dashboard.yourservice.com'
+                ];
+            if (adminDomains.length > 0 && adminDomains.some(allowed => origin.startsWith(allowed))) {
+                res.setHeader('Access-Control-Allow-Origin', origin);
+            }
+            else {
+                // For SDK-based SaaS, we need to be permissive during onboarding
+                // Tenants need to test before adding their domain to authorized list
+                if (process.env.STRICT_CORS === 'true') {
+                    // Strict mode: Only allow registered domains
+                    console.warn(`CORS: Blocked unregistered origin: ${origin}`);
+                    // Don't set Access-Control-Allow-Origin header - this will block the request
+                }
+                else {
+                    // Permissive mode: Allow but log for monitoring
+                    // This allows tenants to test integration before registering their domain
+                    console.log(`CORS: Allowing unregistered origin: ${origin} (consider adding to authorized domains)`);
+                    res.setHeader('Access-Control-Allow-Origin', origin);
+                }
+            }
+        }
     }
     // Set all CORS headers
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
@@ -86,6 +172,11 @@ app.get('/health', async (req, res) => {
             metrics: dbMetrics
         },
         auth: authStats,
+        cors: {
+            authorizedDomainsCount: Array.from(authorizedDomainsCache.values()).reduce((sum, set) => sum + set.size, 0),
+            tenantsWithDomains: authorizedDomainsCache.size,
+            lastCacheRefresh: lastCacheRefresh ? new Date(lastCacheRefresh).toISOString() : 'pending'
+        },
         system: {
             uptime: process.uptime(),
             memory: process.memoryUsage(),
@@ -274,76 +365,8 @@ httpServer.listen(PORT, () => {
     if (!process.env.DATABASE_URL) {
         console.warn('⚠️  WARNING: No DATABASE_URL environment variable set');
     }
-    console.log('CORS: Allowed origins:', process.env.ALLOWED_ORIGINS || 'All origins (dev mode)');
+    console.log('CORS: Dynamic domain authorization enabled');
+    console.log(`CORS: Cache will refresh every ${CACHE_REFRESH_INTERVAL / 1000} seconds`);
+    console.log('CORS: Localhost allowed:', process.env.ALLOW_LOCALHOST === 'true' ? 'Yes' : 'No');
+    console.log('CORS: Strict mode:', process.env.STRICT_CORS === 'true' ? 'Yes (block unknown origins)' : 'No (allow with warning)');
 });
-// import express, { Request, Response } from "express";
-// import { createServer } from "http";
-// import cors from "cors";
-// import {
-//   TenantRouter,
-//   UserRouter,
-//   StreamRouter,
-//   AgendaRouter,
-//   PaymentRouter,
-//   PollRouter,
-//   ParticipantRouter,
-//   QuizRouter,
-//   TenantMeRouter,
-//   ProgramRouter
-// } from "./routes/index.js";
-// import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
-// import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
-// import createSocketServer from "./websocket.js";
-// const app = express();
-// const PORT = 8001;
-// const httpServer = createServer(app);
-// export const wss = createSocketServer(httpServer);
-// app.use(express.json());
-// app.use(express.urlencoded({ extended: true }));
-// const corsOptions = {
-//   origin: function (
-//     origin: string | undefined,
-//     callback: (err: Error | null, allow?: boolean) => void
-//   ) {
-//     // Always allow preflight requests from any origin
-//     // The actual API requests will be filtered by the tenant auth middleware
-//     callback(null, true);
-//   },
-//   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
-//   allowedHeaders: [
-//     "Content-Type",
-//     "x-api-key",
-//     "x-api-secret",
-//     "Authorization",
-//   ],
-//   credentials: true,
-//   maxAge: 86400, // Cache preflight response for 24 hours
-// };
-// app.use(cors(corsOptions));
-// app.use(beaconHandler);
-// app.options('*', cors(corsOptions));
-// // Add body logging middleware for debugging
-// app.use((req: Request, res: Response, next) => {
-//   // console.log(req)
-//   // console.log(`Request received: ${req.method} ${req.url}`);
-//   next();
-// });
-// // Start the enhanced reconciliation job
-// startEnhancedReconciliationJob();
-// app.use("/tenant", TenantRouter.default);
-// app.use(authenticateTenant);
-// app.use("/tenant/me", TenantMeRouter.default);
-// app.use("/user", UserRouter.default);
-// app.use("/stream", StreamRouter.default);
-// app.use("/pay", PaymentRouter.default);
-// app.use("/agenda", AgendaRouter.default);
-// app.use("/poll", PollRouter.default);
-// app.use("/participant", ParticipantRouter.default);
-// app.use("/quiz", QuizRouter.default);
-// app.use("/program", ProgramRouter.default);
-// app.all("*", (req: Request, res: Response) => {
-//   res.status(404).json({ error: `Route ${req.originalUrl} not found` });
-// });
-// httpServer.listen(PORT, () => {
-//   console.log(`Server is listening on port ${PORT}`);
-// });

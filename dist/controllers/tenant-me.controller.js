@@ -257,3 +257,211 @@ setInterval(() => {
         }
     }
 }, 300000); // Clean every 5 minutes
+/**
+ * Get all authorized domains for the current tenant
+ */
+export const getAuthorizedDomains = async (req, res) => {
+    let success = false;
+    try {
+        const tenant = req.tenant;
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        const domains = await executeQuery(() => db.authorizedDomain.findMany({
+            where: { tenantId: tenant.id },
+            select: {
+                id: true,
+                domain: true,
+                createdAt: true
+            },
+            orderBy: { createdAt: 'desc' }
+        }), { maxRetries: 2, timeout: 10000 });
+        success = true;
+        res.status(200).json({
+            domains,
+            count: domains.length
+        });
+    }
+    catch (error) {
+        console.error("Error fetching authorized domains:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+    finally {
+        trackQuery(success);
+    }
+};
+/**
+ * Add a new authorized domain for the current tenant
+ */
+export const addAuthorizedDomain = async (req, res) => {
+    let success = false;
+    try {
+        const tenant = req.tenant;
+        const { domain } = req.body;
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        if (!domain || typeof domain !== 'string') {
+            return res.status(400).json({ error: "Domain is required" });
+        }
+        // Normalize domain (remove protocol if present)
+        let normalizedDomain = domain.trim().toLowerCase();
+        // Remove protocol if present
+        normalizedDomain = normalizedDomain
+            .replace(/^https?:\/\//, '')
+            .replace(/^www\./, '')
+            .replace(/\/$/, ''); // Remove trailing slash
+        // Validate domain format
+        const domainRegex = /^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}(:[0-9]+)?$/;
+        const isLocalhost = normalizedDomain.includes('localhost') ||
+            normalizedDomain.includes('127.0.0.1') ||
+            normalizedDomain.includes('::1');
+        if (!domainRegex.test(normalizedDomain) && !isLocalhost) {
+            return res.status(400).json({
+                error: "Invalid domain format",
+                hint: "Domain should be like 'example.com' or 'subdomain.example.com'"
+            });
+        }
+        // Check if domain already exists for this tenant
+        const existing = await executeQuery(() => db.authorizedDomain.findFirst({
+            where: {
+                domain: normalizedDomain,
+                tenantId: tenant.id
+            }
+        }), { maxRetries: 1, timeout: 5000 });
+        if (existing) {
+            return res.status(409).json({
+                error: "Domain already authorized for this tenant",
+                domain: normalizedDomain
+            });
+        }
+        // Create the authorized domain
+        const authorizedDomain = await executeQuery(() => db.authorizedDomain.create({
+            data: {
+                domain: normalizedDomain,
+                tenantId: tenant.id
+            }
+        }), { maxRetries: 2, timeout: 10000 });
+        success = true;
+        res.status(201).json({
+            message: "Domain authorized successfully",
+            domain: authorizedDomain
+        });
+    }
+    catch (error) {
+        console.error("Error adding authorized domain:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+    finally {
+        trackQuery(success);
+    }
+};
+/**
+ * Remove an authorized domain for the current tenant
+ */
+export const removeAuthorizedDomain = async (req, res) => {
+    let success = false;
+    try {
+        const tenant = req.tenant;
+        const { domainId } = req.params;
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        if (!domainId) {
+            return res.status(400).json({ error: "Domain ID is required" });
+        }
+        // Check if domain exists and belongs to this tenant
+        const domain = await executeQuery(() => db.authorizedDomain.findFirst({
+            where: {
+                id: domainId,
+                tenantId: tenant.id
+            }
+        }), { maxRetries: 1, timeout: 5000 });
+        if (!domain) {
+            return res.status(404).json({ error: "Authorized domain not found" });
+        }
+        // Delete the domain
+        await executeQuery(() => db.authorizedDomain.delete({
+            where: { id: domainId }
+        }), { maxRetries: 2, timeout: 10000 });
+        success = true;
+        res.status(200).json({
+            message: "Domain removed successfully",
+            domain: domain.domain
+        });
+    }
+    catch (error) {
+        console.error("Error removing authorized domain:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+    finally {
+        trackQuery(success);
+    }
+};
+/**
+ * Bulk add authorized domains
+ */
+export const bulkAddAuthorizedDomains = async (req, res) => {
+    let success = false;
+    try {
+        const tenant = req.tenant;
+        const { domains } = req.body;
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        if (!Array.isArray(domains) || domains.length === 0) {
+            return res.status(400).json({ error: "Domains array is required" });
+        }
+        if (domains.length > 50) {
+            return res.status(400).json({ error: "Maximum 50 domains can be added at once" });
+        }
+        const results = {
+            added: [],
+            skipped: [],
+            errors: []
+        };
+        for (const domain of domains) {
+            try {
+                // Normalize domain
+                let normalizedDomain = domain.trim().toLowerCase()
+                    .replace(/^https?:\/\//, '')
+                    .replace(/^www\./, '')
+                    .replace(/\/$/, '');
+                // Check if already exists
+                const existing = await executeQuery(() => db.authorizedDomain.findFirst({
+                    where: {
+                        domain: normalizedDomain,
+                        tenantId: tenant.id
+                    }
+                }), { maxRetries: 1, timeout: 5000 });
+                if (existing) {
+                    results.skipped.push(normalizedDomain);
+                    continue;
+                }
+                // Create domain
+                await executeQuery(() => db.authorizedDomain.create({
+                    data: {
+                        domain: normalizedDomain,
+                        tenantId: tenant.id
+                    }
+                }), { maxRetries: 1, timeout: 5000 });
+                results.added.push(normalizedDomain);
+            }
+            catch (error) {
+                results.errors.push(domain);
+            }
+        }
+        success = true;
+        res.status(200).json({
+            message: "Bulk domain authorization completed",
+            results
+        });
+    }
+    catch (error) {
+        console.error("Error in bulk domain authorization:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+    finally {
+        trackQuery(success);
+    }
+};
