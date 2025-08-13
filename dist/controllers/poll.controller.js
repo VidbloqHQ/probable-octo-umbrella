@@ -1,4 +1,4 @@
-import { db, executeQuery, executeTransaction, trackQuery } from "../prisma.js";
+import { db, executeQuery, trackQuery } from "../prisma.js";
 import { isValidWalletAddress } from "../utils/index.js";
 // Cache for poll results
 const pollResultsCache = new Map();
@@ -6,16 +6,166 @@ const POLL_CACHE_TTL = 10000; // 10 seconds - short because polls are live
 /**
  * Controller for submitting a poll vote - OPTIMIZED
  */
+// export const submitPollVote = async (req: TenantRequest, res: Response) => {
+//   const { agendaId, selectedOption, wallet } = req.body;
+//   const tenant = req.tenant;
+//   let success = false;
+//   try {
+//     // 1. Tenant verification
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });
+//     }
+//     // 2. Input validation
+//     if (!agendaId || !selectedOption || !wallet) {
+//       return res.status(400).json({ 
+//         error: "Missing required fields: agendaId, selectedOption, or wallet" 
+//       });
+//     }
+//     if (!isValidWalletAddress(wallet)) {
+//       return res.status(400).json({ error: "Invalid wallet address format." });
+//     }
+//     // 3. Get agenda with poll content and verify participant in parallel
+//     const [agenda, participant] = await Promise.all([
+//       executeQuery(
+//         () => db.agenda.findFirst({
+//           where: {
+//             id: agendaId,
+//             tenantId: tenant.id,
+//             action: "Poll",
+//           },
+//           include: {
+//             pollContent: true,
+//             stream: {
+//               select: { id: true }
+//             }
+//           }
+//         }),
+//         { maxRetries: 2, timeout: 10000 }
+//       ),
+//       executeQuery(
+//         () => db.participant.findFirst({
+//           where: {
+//             walletAddress: wallet,
+//             tenantId: tenant.id,
+//             leftAt: null // Only active participants
+//           },
+//           select: {
+//             id: true,
+//             streamId: true
+//           }
+//         }),
+//         { maxRetries: 1, timeout: 5000 }
+//       )
+//     ]);
+//     if (!agenda) {
+//       return res.status(404).json({ 
+//         error: "Poll not found",
+//         details: `Agenda ${agendaId} is not found or does not belong to your tenant`
+//       });
+//     }
+//     if (!agenda.pollContent) {
+//       return res.status(404).json({ 
+//         error: "Poll content not found",
+//         details: `Poll content for agenda ${agendaId} is missing`
+//       });
+//     }
+//     if (!participant || participant.streamId !== agenda.stream.id) {
+//       return res.status(403).json({ 
+//         error: "Only active stream participants can vote" 
+//       });
+//     }
+//     // 5. Verify poll option is valid
+//     if (!agenda.pollContent.options.includes(selectedOption)) {
+//       return res.status(400).json({ 
+//         error: "Invalid poll option",
+//         validOptions: agenda.pollContent.options
+//       });
+//     }
+//     // 6. Check if participant has already voted
+//     const existingVote = await executeQuery(
+//       () => db.pollVote.findFirst({
+//         where: {
+//           pollContentId: agenda.pollContent!.id,
+//           participantId: participant.id
+//         },
+//         select: { 
+//           id: true,
+//           selectedOption: true 
+//         }
+//       }),
+//       { maxRetries: 1, timeout: 5000 }
+//     );
+//     if (existingVote) {
+//       return res.status(400).json({ 
+//         error: "You have already voted in this poll",
+//         previousVote: existingVote.selectedOption
+//       });
+//     }
+//     // 7. Record the vote using transaction for consistency
+//     await executeTransaction(async (tx) => {
+//       // Create the vote
+//       await tx.pollVote.create({
+//         data: {
+//           pollContentId: agenda.pollContent!.id,
+//           selectedOption,
+//           participantId: participant.id
+//         }
+//       });
+//       // Update total votes count
+//       await tx.pollContent.update({
+//         where: { id: agenda.pollContent!.id },
+//         data: { totalVotes: { increment: 1 } }
+//       });
+//       // Create participant response record
+//       await tx.participantResponse.create({
+//         data: {
+//           agendaId: agenda.id,
+//           participantId: participant.id,
+//           responseType: "poll_vote"
+//         }
+//       });
+//     }, { maxWait: 5000, timeout: 15000 });
+//     // Invalidate cache
+//     pollResultsCache.delete(agendaId);
+//     success = true;
+//     res.status(201).json({
+//       message: "Vote recorded successfully",
+//       selectedOption,
+//       agendaId,
+//       pollTitle: agenda.title
+//     });
+//   } catch (error: any) {
+//     console.error("Error submitting poll vote:", error);
+//     // Check for specific Prisma errors
+//     if (error.code === 'P2002') {
+//       return res.status(400).json({ 
+//         error: "You have already voted in this poll" 
+//       });
+//     }
+//     if (error.code === 'P2024' || error.code === 'TIMEOUT') {
+//       return res.status(503).json({ 
+//         error: "Service temporarily unavailable. Please try again.",
+//         retry: true
+//       });
+//     }
+//     res.status(500).json({ 
+//       error: "Internal server error",
+//     });
+//   } finally {
+//     trackQuery(success);
+//   }
+// };
+/**
+ * Controller for submitting a poll vote - REFACTORED WITHOUT TRANSACTIONS
+ */
 export const submitPollVote = async (req, res) => {
     const { agendaId, selectedOption, wallet } = req.body;
     const tenant = req.tenant;
     let success = false;
     try {
-        // 1. Tenant verification
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
-        // 2. Input validation
         if (!agendaId || !selectedOption || !wallet) {
             return res.status(400).json({
                 error: "Missing required fields: agendaId, selectedOption, or wallet"
@@ -24,7 +174,7 @@ export const submitPollVote = async (req, res) => {
         if (!isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Invalid wallet address format." });
         }
-        // 3. Get agenda with poll content and verify participant in parallel
+        // Get agenda and participant in parallel
         const [agenda, participant] = await Promise.all([
             executeQuery(() => db.agenda.findFirst({
                 where: {
@@ -38,7 +188,7 @@ export const submitPollVote = async (req, res) => {
                         select: { id: true }
                     }
                 }
-            }), { maxRetries: 2, timeout: 10000 }),
+            }), { maxRetries: 2, timeout: 5000 }),
             executeQuery(() => db.participant.findFirst({
                 where: {
                     walletAddress: wallet,
@@ -49,7 +199,7 @@ export const submitPollVote = async (req, res) => {
                     id: true,
                     streamId: true
                 }
-            }), { maxRetries: 1, timeout: 5000 })
+            }), { maxRetries: 1, timeout: 3000 })
         ]);
         if (!agenda) {
             return res.status(404).json({
@@ -68,14 +218,14 @@ export const submitPollVote = async (req, res) => {
                 error: "Only active stream participants can vote"
             });
         }
-        // 5. Verify poll option is valid
+        // Verify poll option is valid
         if (!agenda.pollContent.options.includes(selectedOption)) {
             return res.status(400).json({
                 error: "Invalid poll option",
                 validOptions: agenda.pollContent.options
             });
         }
-        // 6. Check if participant has already voted
+        // Check if participant has already voted
         const existingVote = await executeQuery(() => db.pollVote.findFirst({
             where: {
                 pollContentId: agenda.pollContent.id,
@@ -85,37 +235,55 @@ export const submitPollVote = async (req, res) => {
                 id: true,
                 selectedOption: true
             }
-        }), { maxRetries: 1, timeout: 5000 });
+        }), { maxRetries: 1, timeout: 3000 });
         if (existingVote) {
             return res.status(400).json({
                 error: "You have already voted in this poll",
                 previousVote: existingVote.selectedOption
             });
         }
-        // 7. Record the vote using transaction for consistency
-        await executeTransaction(async (tx) => {
-            // Create the vote
-            await tx.pollVote.create({
+        // Step 1: Create the vote (uses unique constraint for natural idempotency)
+        let voteCreated = false;
+        try {
+            await executeQuery(() => db.pollVote.create({
                 data: {
                     pollContentId: agenda.pollContent.id,
                     selectedOption,
                     participantId: participant.id
                 }
-            });
-            // Update total votes count
-            await tx.pollContent.update({
+            }), { maxRetries: 2, timeout: 5000 });
+            voteCreated = true;
+        }
+        catch (error) {
+            if (error.code === 'P2002') {
+                // Unique constraint violation - user already voted
+                return res.status(400).json({
+                    error: "You have already voted in this poll"
+                });
+            }
+            throw error;
+        }
+        // Step 2: Update total votes count (if vote was created)
+        if (voteCreated) {
+            await executeQuery(() => db.pollContent.update({
                 where: { id: agenda.pollContent.id },
                 data: { totalVotes: { increment: 1 } }
+            }), { maxRetries: 2, timeout: 3000 }).catch(err => {
+                console.error("Failed to increment vote count:", err);
+                // Non-critical - vote count can be recalculated from votes table
             });
-            // Create participant response record
-            await tx.participantResponse.create({
+            // Step 3: Create participant response record
+            await executeQuery(() => db.participantResponse.create({
                 data: {
                     agendaId: agenda.id,
                     participantId: participant.id,
                     responseType: "poll_vote"
                 }
+            }), { maxRetries: 1, timeout: 3000 }).catch(err => {
+                console.error("Failed to create participant response:", err);
+                // Non-critical - vote is already recorded
             });
-        }, { maxWait: 5000, timeout: 15000 });
+        }
         // Invalidate cache
         pollResultsCache.delete(agendaId);
         success = true;
@@ -128,7 +296,6 @@ export const submitPollVote = async (req, res) => {
     }
     catch (error) {
         console.error("Error submitting poll vote:", error);
-        // Check for specific Prisma errors
         if (error.code === 'P2002') {
             return res.status(400).json({
                 error: "You have already voted in this poll"

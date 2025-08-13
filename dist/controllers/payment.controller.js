@@ -1,7 +1,7 @@
 import { PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, createTransferInstruction, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, } from "@solana/spl-token";
-import { tokenMintAccounts, connection, checkSolBalance, } from "../utils/index.js";
-import { db, executeQuery, executeTransaction, trackQuery } from "../prisma.js";
+import { tokenMintAccounts, connection, checkSolBalance, checkIdempotencyFast, generateIdempotencyKey, } from "../utils/index.js";
+import { db, executeQuery, trackQuery } from "../prisma.js";
 // Cache for token account checks
 const tokenAccountCache = new Map();
 const TOKEN_ACCOUNT_CACHE_TTL = 30000; // 30 seconds
@@ -165,12 +165,133 @@ export const createTransaction = async (req, res) => {
 /**
  * Controller for submitting a transaction - OPTIMIZED
  */
+// export const submitTransaction = async (req: TenantRequest, res: Response) => {
+//   const { signedTransaction, wallet } = req.body;
+//   const tenant = req.tenant;
+//   let success = false;
+//   try {
+//     // Tenant verification
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });
+//     }
+//     if (!signedTransaction) {
+//       return res.status(400).json({ error: "Signed transaction is required" });
+//     }
+//     const transactionBuffer = Buffer.from(signedTransaction, "base64");
+//     const transaction = Transaction.from(transactionBuffer);
+//     // Verify transaction signer
+//     const signer = transaction.feePayer?.toString();
+//     console.log({ signer });
+//     if (!signer) {
+//       return res.status(400).json({ 
+//         error: "Invalid transaction: no fee payer" 
+//       });
+//     }
+//     // Verify user belongs to tenant
+//     const user = await executeQuery(
+//       () => db.user.findFirst({
+//         where: {
+//           walletAddress: signer,
+//           tenantId: tenant.id,
+//         },
+//       }),
+//       { maxRetries: 1, timeout: 5000 }
+//     );
+//     if (!user) {
+//       return res.status(403).json({ 
+//         error: "Transaction signer not authorized for this tenant" 
+//       });
+//     }
+//     // Submit to blockchain with better error handling
+//     try {
+//       const signature = await connection.sendRawTransaction(
+//         transaction.serialize()
+//       );
+//       // Wait for confirmation with timeout
+//       const confirmationPromise = connection.confirmTransaction(signature, "confirmed");
+//       const timeoutPromise = new Promise((_, reject) =>
+//         setTimeout(() => reject(new Error("Confirmation timeout")), 30000)
+//       );
+//       await Promise.race([confirmationPromise, timeoutPromise]);
+//       // Update user and record transaction in a single transaction
+//       const result = await executeTransaction(async (tx) => {
+//         // Update user points
+//         const updatedUser = await tx.user.update({
+//           where: { id: user.id },
+//           data: {
+//             points: (user.points || 0) + 5,
+//           },
+//         });
+//         // Record transaction
+//         const txRecord = await tx.transaction.create({
+//           data: {
+//             signature,
+//             createdAt: new Date(),
+//             tenantId: tenant.id,
+//             userId: user.id,
+//             transactionType: 'payment'
+//           },
+//         });
+//         return { updatedUser, txRecord };
+//       }, { maxWait: 5000, timeout: 15000 });
+//       success = true;
+//       res.json({
+//         data: "Payment successful",
+//         signature: result.txRecord.signature,
+//         points: result.updatedUser.points,
+//       });
+//     } catch (err: any) {
+//       console.error("Transaction submission error:", err);
+//       // Get detailed error information
+//       let errorMessage = "Failed to submit transaction";
+//       let errorLogs: string[] = [];
+//       if (err instanceof Error) {
+//         errorMessage = err.message;
+//         // Extract Solana-specific error details
+//         if ('logs' in err) {
+//           errorLogs = err.logs as string[];
+//         }
+//       }
+//       // Provide user-friendly error messages
+//       if (errorMessage.includes("Attempt to debit an account but found no record of a prior credit")) {
+//         return res.status(400).json({
+//           error: "Insufficient funds. The sender account doesn't have enough tokens or SOL.",
+//           logs: errorLogs,
+//         });
+//       }
+//       if (errorMessage.includes("blockhash not found")) {
+//         return res.status(400).json({
+//           error: "Transaction expired. Please create a new transaction and try again.",
+//           logs: errorLogs,
+//         });
+//       }
+//       if (errorMessage.includes("Confirmation timeout")) {
+//         return res.status(408).json({
+//           error: "Transaction confirmation timeout. The transaction may still be processed.",
+//           logs: errorLogs,
+//         });
+//       }
+//       return res.status(400).json({
+//         error: errorMessage,
+//         logs: errorLogs,
+//       });
+//     }
+//   } catch (error) {
+//     console.error("Error submitting transaction:", error);
+//     res.status(500).json({ error: "Failed to submit transaction" });
+//   } finally {
+//     trackQuery(success);
+//   }
+// };
+// Periodic cache cleanup
+/**
+ * Controller for submitting a transaction - REFACTORED WITHOUT TRANSACTIONS
+ */
 export const submitTransaction = async (req, res) => {
     const { signedTransaction, wallet } = req.body;
     const tenant = req.tenant;
     let success = false;
     try {
-        // Tenant verification
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
@@ -193,93 +314,117 @@ export const submitTransaction = async (req, res) => {
                 walletAddress: signer,
                 tenantId: tenant.id,
             },
-        }), { maxRetries: 1, timeout: 5000 });
+        }), { maxRetries: 1, timeout: 3000 });
         if (!user) {
             return res.status(403).json({
                 error: "Transaction signer not authorized for this tenant"
             });
         }
-        // Submit to blockchain with better error handling
-        try {
-            const signature = await connection.sendRawTransaction(transaction.serialize());
-            // Wait for confirmation with timeout
-            const confirmationPromise = connection.confirmTransaction(signature, "confirmed");
-            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Confirmation timeout")), 30000));
-            await Promise.race([confirmationPromise, timeoutPromise]);
-            // Update user and record transaction in a single transaction
-            const result = await executeTransaction(async (tx) => {
-                // Update user points
-                const updatedUser = await tx.user.update({
-                    where: { id: user.id },
-                    data: {
-                        points: (user.points || 0) + 5,
-                    },
-                });
-                // Record transaction
-                const txRecord = await tx.transaction.create({
-                    data: {
-                        signature,
-                        createdAt: new Date(),
-                        tenantId: tenant.id,
-                        userId: user.id,
-                        transactionType: 'payment'
-                    },
-                });
-                return { updatedUser, txRecord };
-            }, { maxWait: 5000, timeout: 15000 });
-            success = true;
-            res.json({
-                data: "Payment successful",
-                signature: result.txRecord.signature,
-                points: result.updatedUser.points,
-            });
-        }
-        catch (err) {
-            console.error("Transaction submission error:", err);
-            // Get detailed error information
-            let errorMessage = "Failed to submit transaction";
-            let errorLogs = [];
-            if (err instanceof Error) {
-                errorMessage = err.message;
-                // Extract Solana-specific error details
-                if ('logs' in err) {
-                    errorLogs = err.logs;
+        // Generate idempotency key for this transaction
+        const idempotencyKey = generateIdempotencyKey('submitTransaction', tenant.id, signer, signedTransaction.substring(0, 50) // Use first 50 chars as unique identifier
+        );
+        // Check idempotency to prevent double-spending
+        const { cached, result } = await checkIdempotencyFast(idempotencyKey, async () => {
+            // Submit to blockchain
+            let signature;
+            try {
+                signature = await connection.sendRawTransaction(transaction.serialize());
+                // Wait for confirmation with timeout
+                const confirmationPromise = connection.confirmTransaction(signature, "confirmed");
+                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Confirmation timeout")), 30000));
+                await Promise.race([confirmationPromise, timeoutPromise]);
+            }
+            catch (err) {
+                console.error("Transaction submission error:", err);
+                // Get detailed error information
+                let errorMessage = "Failed to submit transaction";
+                let errorLogs = [];
+                if (err instanceof Error) {
+                    errorMessage = err.message;
+                    // Extract Solana-specific error details
+                    if ('logs' in err) {
+                        errorLogs = err.logs;
+                    }
                 }
+                // Provide user-friendly error messages
+                if (errorMessage.includes("Attempt to debit an account but found no record of a prior credit")) {
+                    throw {
+                        userError: "Insufficient funds. The sender account doesn't have enough tokens or SOL.",
+                        logs: errorLogs
+                    };
+                }
+                if (errorMessage.includes("blockhash not found")) {
+                    throw {
+                        userError: "Transaction expired. Please create a new transaction and try again.",
+                        logs: errorLogs
+                    };
+                }
+                if (errorMessage.includes("Confirmation timeout")) {
+                    throw {
+                        userError: "Transaction confirmation timeout. The transaction may still be processed.",
+                        logs: errorLogs
+                    };
+                }
+                throw {
+                    userError: errorMessage,
+                    logs: errorLogs
+                };
             }
-            // Provide user-friendly error messages
-            if (errorMessage.includes("Attempt to debit an account but found no record of a prior credit")) {
-                return res.status(400).json({
-                    error: "Insufficient funds. The sender account doesn't have enough tokens or SOL.",
-                    logs: errorLogs,
-                });
-            }
-            if (errorMessage.includes("blockhash not found")) {
-                return res.status(400).json({
-                    error: "Transaction expired. Please create a new transaction and try again.",
-                    logs: errorLogs,
-                });
-            }
-            if (errorMessage.includes("Confirmation timeout")) {
-                return res.status(408).json({
-                    error: "Transaction confirmation timeout. The transaction may still be processed.",
-                    logs: errorLogs,
-                });
-            }
-            return res.status(400).json({
-                error: errorMessage,
-                logs: errorLogs,
+            // Step 1: Record transaction (critical)
+            const txRecord = await executeQuery(() => db.transaction.create({
+                data: {
+                    signature,
+                    createdAt: new Date(),
+                    tenantId: tenant.id,
+                    userId: user.id,
+                    transactionType: 'payment'
+                },
+            }), { maxRetries: 2, timeout: 5000 });
+            // Step 2: Update user points (non-critical, fire and forget)
+            executeQuery(() => db.user.update({
+                where: { id: user.id },
+                data: {
+                    points: { increment: 5 }
+                },
+            }), { maxRetries: 1, timeout: 3000 }).catch(err => {
+                console.error("Failed to update user points:", err);
+                // Non-critical - continue
             });
+            return {
+                signature: txRecord.signature,
+                points: (user.points || 0) + 5
+            };
+        }, {
+            useMemoryCache: true,
+            useDbCache: true,
+            ttlMinutes: 60 // Cache for 1 hour to prevent double-spending
+        });
+        if (cached) {
+            console.log(`Returned cached transaction result for idempotency key: ${idempotencyKey}`);
         }
+        success = true;
+        res.json({
+            data: "Payment successful",
+            signature: result.signature,
+            points: result.points,
+            cached: cached
+        });
     }
     catch (error) {
         console.error("Error submitting transaction:", error);
+        // Handle custom error format from idempotency function
+        if (error.userError) {
+            return res.status(400).json({
+                error: error.userError,
+                logs: error.logs || []
+            });
+        }
         res.status(500).json({ error: "Failed to submit transaction" });
     }
     finally {
         trackQuery(success);
     }
 };
-// Periodic cache cleanup
 setInterval(() => {
     const now = Date.now();
     for (const [key, value] of tokenAccountCache.entries()) {

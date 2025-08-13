@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { db, executeQuery, executeTransaction, trackQuery } from "../prisma.js";
+import { db, executeQuery, trackQuery } from "../prisma.js";
 import { generateApiKeyData, isValidWalletAddress } from "../utils/index.js";
 
 // Cache for API keys list
@@ -9,29 +9,109 @@ const API_KEYS_CACHE_TTL = 60000; // 1 minute
 /**
  * Controller for creating a new tenant - OPTIMIZED
  */
+// export const createTenant = async (req: Request, res: Response) => {
+//   let success = false;
+  
+//   try {
+//     const { creatorWallet } = req.body;
+
+//     if (!creatorWallet || typeof creatorWallet !== "string") {
+//       return res.status(400).json({
+//         error: "Missing required field: wallet address is required",
+//       });
+//     }
+    
+//     if (!isValidWalletAddress(creatorWallet)) {
+//       return res.status(400).json({ error: "Invalid wallet address format." });
+//     }
+
+//     // Check if tenant already exists for this wallet
+//     const existingTenant = await executeQuery(
+//       () => db.tenant.findUnique({
+//         where: { creatorWallet },
+//         select: { id: true }
+//       }),
+//       { maxRetries: 1, timeout: 5000 }
+//     );
+
+//     if (existingTenant) {
+//       return res.status(400).json({ 
+//         error: "Tenant already exists for this wallet address" 
+//       });
+//     }
+
+//     // Generate API key data
+//     const apiKeyData = await generateApiKeyData("Default API Key");
+
+//     // Create tenant and API key in a transaction
+//     const result = await executeTransaction(async (tx) => {
+//       // Create the tenant
+//       const tenant = await tx.tenant.create({
+//         data: {
+//           creatorWallet,
+//         },
+//       });
+
+//       // Create the API key
+//       const apiKey = await tx.apiToken.create({
+//         data: {
+//           key: apiKeyData.key,
+//           secret: apiKeyData.hashedSecret,
+//           name: apiKeyData.name,
+//           tenantId: tenant.id,
+//           expiresAt: apiKeyData.expiresAt,
+//         },
+//       });
+
+//       return { tenant, apiKey };
+//     }, { maxWait: 10000, timeout: 30000 });
+
+//     success = true;
+//     return res.status(201).json({
+//       tenant: {
+//         id: result.tenant.id,
+//         name: result.tenant.name,
+//         createdAt: result.tenant.createdAt,
+//       },
+//       apiKey: {
+//         id: result.apiKey.id,
+//         name: result.apiKey.name,
+//         key: result.apiKey.key,
+//         secret: apiKeyData.rawSecret, // Only sent once during creation
+//         createdAt: result.apiKey.createdAt,
+//         expiresAt: result.apiKey.expiresAt,
+//       },
+//     });
+//   } catch (error) {
+//     console.error("Error creating tenant:", error);
+//     return res.status(500).json({ error: "Failed to create tenant" });
+//   } finally {
+//     trackQuery(success);
+//   }
+// };
+
+/**
+ * Controller for creating a new tenant - REFACTORED WITHOUT TRANSACTIONS
+ */
 export const createTenant = async (req: Request, res: Response) => {
   let success = false;
   
   try {
     const { creatorWallet } = req.body;
 
-    if (!creatorWallet || typeof creatorWallet !== "string") {
+    if (!creatorWallet || !isValidWalletAddress(creatorWallet)) {
       return res.status(400).json({
-        error: "Missing required field: wallet address is required",
+        error: "Valid wallet address required",
       });
     }
-    
-    if (!isValidWalletAddress(creatorWallet)) {
-      return res.status(400).json({ error: "Invalid wallet address format." });
-    }
 
-    // Check if tenant already exists for this wallet
+    // Check if tenant already exists
     const existingTenant = await executeQuery(
       () => db.tenant.findUnique({
         where: { creatorWallet },
         select: { id: true }
       }),
-      { maxRetries: 1, timeout: 5000 }
+      { maxRetries: 1, timeout: 3000 }
     );
 
     if (existingTenant) {
@@ -43,43 +123,61 @@ export const createTenant = async (req: Request, res: Response) => {
     // Generate API key data
     const apiKeyData = await generateApiKeyData("Default API Key");
 
-    // Create tenant and API key in a transaction
-    const result = await executeTransaction(async (tx) => {
-      // Create the tenant
-      const tenant = await tx.tenant.create({
+    // Step 1: Create tenant (atomic operation)
+    const tenant = await executeQuery(
+      () => db.tenant.create({
         data: {
           creatorWallet,
         },
-      });
+      }),
+      { maxRetries: 2, timeout: 5000 }
+    );
 
-      // Create the API key
-      const apiKey = await tx.apiToken.create({
-        data: {
-          key: apiKeyData.key,
-          secret: apiKeyData.hashedSecret,
-          name: apiKeyData.name,
-          tenantId: tenant.id,
-          expiresAt: apiKeyData.expiresAt,
-        },
+    // Step 2: Create API key (separate operation with compensation)
+    let apiKey;
+    try {
+      apiKey = await executeQuery(
+        () => db.apiToken.create({
+          data: {
+            key: apiKeyData.key,
+            secret: apiKeyData.hashedSecret,
+            name: apiKeyData.name,
+            tenantId: tenant.id,
+            expiresAt: apiKeyData.expiresAt,
+          },
+        }),
+        { maxRetries: 2, timeout: 5000 }
+      );
+    } catch (error) {
+      // Compensation: Delete the tenant if API key creation fails
+      console.error("Failed to create API key, rolling back tenant:", error);
+      
+      await executeQuery(
+        () => db.tenant.delete({
+          where: { id: tenant.id }
+        }),
+        { maxRetries: 1, timeout: 3000 }
+      ).catch(err => {
+        console.error("Failed to rollback tenant:", err);
       });
-
-      return { tenant, apiKey };
-    }, { maxWait: 10000, timeout: 30000 });
+      
+      throw new Error("Failed to create API key for tenant");
+    }
 
     success = true;
     return res.status(201).json({
       tenant: {
-        id: result.tenant.id,
-        name: result.tenant.name,
-        createdAt: result.tenant.createdAt,
+        id: tenant.id,
+        name: tenant.name,
+        createdAt: tenant.createdAt,
       },
       apiKey: {
-        id: result.apiKey.id,
-        name: result.apiKey.name,
-        key: result.apiKey.key,
+        id: apiKey.id,
+        name: apiKey.name,
+        key: apiKey.key,
         secret: apiKeyData.rawSecret, // Only sent once during creation
-        createdAt: result.apiKey.createdAt,
-        expiresAt: result.apiKey.expiresAt,
+        createdAt: apiKey.createdAt,
+        expiresAt: apiKey.expiresAt,
       },
     });
   } catch (error) {
@@ -89,7 +187,6 @@ export const createTenant = async (req: Request, res: Response) => {
     trackQuery(success);
   }
 };
-
 /**
  * Controller for generating new API keys for an existing tenant - OPTIMIZED
  */

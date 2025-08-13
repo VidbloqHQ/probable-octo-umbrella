@@ -1,5 +1,5 @@
 import { Response } from "express";
-import { db, executeQuery, executeTransaction, trackQuery } from "../prisma.js";
+import { db, executeQuery, trackQuery } from "../prisma.js";
 import { TenantRequest } from "../types/index.js";
 import { isValidWalletAddress } from "../utils/index.js";
 
@@ -10,6 +10,199 @@ const QUIZ_CACHE_TTL = 60000; // 1 minute
 /**
  * Controller for submitting multiple quiz answers at once - OPTIMIZED
  */
+// export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
+//   const { agendaId } = req.params;
+//   const { wallet, answers, totalScore } = req.body;
+//   const tenant = req.tenant;
+//   let success = false;
+
+//   try {
+//     // 1. Tenant verification
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });
+//     }
+
+//     // 2. Input validation
+//     if (!agendaId || !wallet || !answers || !Array.isArray(answers)) {
+//       return res.status(400).json({ 
+//         error: "Missing required fields: agendaId, wallet, or answers array" 
+//       });
+//     }
+
+//     if (typeof totalScore !== 'number' || totalScore < 0) {
+//       return res.status(400).json({ error: "Invalid totalScore (must be a non-negative number)" });
+//     }
+
+//     if (!isValidWalletAddress(wallet)) {
+//       return res.status(400).json({ error: "Invalid wallet address format." });
+//     }
+
+//     // 3. Get agenda and participant in parallel
+//     const [agenda, participant] = await Promise.all([
+//       executeQuery(
+//         () => db.agenda.findFirst({
+//           where: {
+//             id: agendaId,
+//             tenantId: tenant.id,
+//             action: "Quiz"
+//           },
+//           include: {
+//             quizContent: {
+//               include: {
+//                 questions: {
+//                   select: {
+//                     id: true
+//                   }
+//                 }
+//               }
+//             },
+//             stream: {
+//               select: { id: true }
+//             }
+//           }
+//         }),
+//         { maxRetries: 2, timeout: 10000 }
+//       ),
+//       executeQuery(
+//         () => db.participant.findFirst({
+//           where: {
+//             walletAddress: wallet,
+//             tenantId: tenant.id
+//           },
+//           select: {
+//             id: true,
+//             streamId: true
+//           }
+//         }),
+//         { maxRetries: 1, timeout: 5000 }
+//       )
+//     ]);
+
+//     if (!agenda) {
+//       return res.status(404).json({ 
+//         error: "Quiz not found",
+//         details: `Agenda ${agendaId} is not found or does not belong to your tenant`
+//       });
+//     }
+
+//     if (!agenda.quizContent) {
+//       return res.status(404).json({ 
+//         error: "Quiz content not found",
+//         details: `Quiz content for agenda ${agendaId} is missing`
+//       });
+//     }
+
+//     if (!participant || participant.streamId !== agenda.stream.id) {
+//       return res.status(404).json({ 
+//         error: "Participant not found in this stream" 
+//       });
+//     }
+
+//     // 5. Check if participant has already submitted answers
+//     const existingResponses = await executeQuery(
+//       () => db.quizResponse.findFirst({
+//         where: {
+//           question: {
+//             quizContent: {
+//               agendaId
+//             }
+//           },
+//           participantId: participant.id
+//         },
+//         select: { id: true }
+//       }),
+//       { maxRetries: 1, timeout: 5000 }
+//     );
+
+//     if (existingResponses) {
+//       return res.status(400).json({ 
+//         error: "You have already submitted answers to this quiz" 
+//       });
+//     }
+
+//     // 6. Validate all questionIds exist in this quiz
+//     const quizQuestionIds = new Set(agenda.quizContent.questions.map(q => q.id));
+//     const invalidQuestionIds = answers.filter(a => !quizQuestionIds.has(a.questionId));
+    
+//     if (invalidQuestionIds.length > 0) {
+//       return res.status(400).json({ 
+//         error: "Invalid question IDs in submission",
+//         invalidIds: invalidQuestionIds.map(a => a.questionId)
+//       });
+//     }
+
+//     // 7. Create responses using transaction for consistency
+//     await executeTransaction(async (tx) => {
+//       // Prepare bulk data
+//       const quizResponseData = answers.map(answer => ({
+//         questionId: answer.questionId,
+//         participantId: participant.id,
+//         answer: answer.answer,
+//         isCorrect: answer.isCorrect,
+//         pointsEarned: answer.pointsEarned || 0
+//       }));
+
+//       // Create all responses at once
+//       await tx.quizResponse.createMany({
+//         data: quizResponseData
+//       });
+      
+//       // Create participant response record
+//       await tx.participantResponse.create({
+//         data: {
+//           agendaId: agenda.id,
+//           participantId: participant.id,
+//           responseType: "quiz_submission"
+//         }
+//       });
+      
+//       // Update participant points
+//       await tx.participant.update({
+//         where: { id: participant.id },
+//         data: { 
+//           totalPoints: { increment: totalScore }
+//         }
+//       });
+//     }, { maxWait: 10000, timeout: 30000 });
+
+//     // Invalidate cache
+//     quizCache.delete(`${agendaId}:results`);
+
+//     success = true;
+//     res.status(201).json({
+//       message: "Quiz answers submitted successfully",
+//       totalScore,
+//       answersSubmitted: answers.length
+//     });
+//   } catch (error: any) {
+//     console.error("Error submitting quiz answers:", error);
+    
+//     if (error.code === 'P2028' || error.code === 'TIMEOUT') {
+//       return res.status(408).json({ 
+//         error: "Request timeout - please try again",
+//         details: "The operation took too long to complete"
+//       });
+//     }
+    
+//     if (error.code === 'P2002') {
+//       return res.status(400).json({ 
+//         error: "Duplicate submission detected",
+//         details: "This quiz has already been submitted"
+//       });
+//     }
+    
+//     res.status(500).json({ 
+//       error: "Internal server error",
+//     });
+//   } finally {
+//     trackQuery(success);
+//   }
+// };
+
+
+/**
+ * Controller for submitting multiple quiz answers - REFACTORED WITHOUT TRANSACTIONS
+ */
 export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
   const { agendaId } = req.params;
   const { wallet, answers, totalScore } = req.body;
@@ -17,12 +210,10 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
   let success = false;
 
   try {
-    // 1. Tenant verification
     if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
 
-    // 2. Input validation
     if (!agendaId || !wallet || !answers || !Array.isArray(answers)) {
       return res.status(400).json({ 
         error: "Missing required fields: agendaId, wallet, or answers array" 
@@ -37,7 +228,7 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
       return res.status(400).json({ error: "Invalid wallet address format." });
     }
 
-    // 3. Get agenda and participant in parallel
+    // Get agenda and participant in parallel
     const [agenda, participant] = await Promise.all([
       executeQuery(
         () => db.agenda.findFirst({
@@ -61,7 +252,7 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
             }
           }
         }),
-        { maxRetries: 2, timeout: 10000 }
+        { maxRetries: 2, timeout: 5000 }
       ),
       executeQuery(
         () => db.participant.findFirst({
@@ -74,7 +265,7 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
             streamId: true
           }
         }),
-        { maxRetries: 1, timeout: 5000 }
+        { maxRetries: 1, timeout: 3000 }
       )
     ]);
 
@@ -98,7 +289,7 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // 5. Check if participant has already submitted answers
+    // Check if participant has already submitted answers
     const existingResponses = await executeQuery(
       () => db.quizResponse.findFirst({
         where: {
@@ -111,7 +302,7 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
         },
         select: { id: true }
       }),
-      { maxRetries: 1, timeout: 5000 }
+      { maxRetries: 1, timeout: 3000 }
     );
 
     if (existingResponses) {
@@ -120,7 +311,7 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // 6. Validate all questionIds exist in this quiz
+    // Validate all questionIds exist in this quiz
     const quizQuestionIds = new Set(agenda.quizContent.questions.map(q => q.id));
     const invalidQuestionIds = answers.filter(a => !quizQuestionIds.has(a.questionId));
     
@@ -131,48 +322,103 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // 7. Create responses using transaction for consistency
-    await executeTransaction(async (tx) => {
-      // Prepare bulk data
-      const quizResponseData = answers.map(answer => ({
-        questionId: answer.questionId,
-        participantId: participant.id,
-        answer: answer.answer,
-        isCorrect: answer.isCorrect,
-        pointsEarned: answer.pointsEarned || 0
-      }));
+    // Create responses individually (not in transaction)
+    const createdResponses: any[] = [];
+    const failedResponses: any[] = [];
 
-      // Create all responses at once
-      await tx.quizResponse.createMany({
-        data: quizResponseData
-      });
-      
-      // Create participant response record
-      await tx.participantResponse.create({
-        data: {
-          agendaId: agenda.id,
-          participantId: participant.id,
-          responseType: "quiz_submission"
+    // Step 1: Create all quiz responses
+    for (const answer of answers) {
+      try {
+        const response = await executeQuery(
+          () => db.quizResponse.create({
+            data: {
+              questionId: answer.questionId,
+              participantId: participant.id,
+              answer: answer.answer,
+              isCorrect: answer.isCorrect,
+              pointsEarned: answer.pointsEarned || 0
+            }
+          }),
+          { maxRetries: 1, timeout: 3000 }
+        );
+        createdResponses.push(response);
+      } catch (error: any) {
+        // If it's a unique constraint violation, the user already answered
+        if (error.code === 'P2002') {
+          failedResponses.push({
+            questionId: answer.questionId,
+            error: "Already answered"
+          });
+        } else {
+          failedResponses.push({
+            questionId: answer.questionId,
+            error: error.message
+          });
         }
+      }
+    }
+
+    // Step 2: Create participant response record (if at least one answer was saved)
+    if (createdResponses.length > 0) {
+      await executeQuery(
+        () => db.participantResponse.create({
+          data: {
+            agendaId: agenda.id,
+            participantId: participant.id,
+            responseType: "quiz_submission"
+          }
+        }),
+        { maxRetries: 1, timeout: 3000 }
+      ).catch(err => {
+        console.error("Failed to create participant response record:", err);
+        // Non-critical - continue
       });
-      
-      // Update participant points
-      await tx.participant.update({
-        where: { id: participant.id },
-        data: { 
-          totalPoints: { increment: totalScore }
-        }
+
+      // Step 3: Update participant points
+      await executeQuery(
+        () => db.participant.update({
+          where: { id: participant.id },
+          data: { 
+            totalPoints: { increment: totalScore },
+            version: { increment: 1 }
+          }
+        }),
+        { maxRetries: 2, timeout: 3000 }
+      ).catch(err => {
+        console.error("Failed to update participant points:", err);
+        // Non-critical - points can be recalculated
       });
-    }, { maxWait: 10000, timeout: 30000 });
+    }
 
     // Invalidate cache
     quizCache.delete(`${agendaId}:results`);
 
+    // Return appropriate response
+    if (createdResponses.length === 0) {
+      return res.status(400).json({
+        error: "Failed to submit any answers",
+        failures: failedResponses
+      });
+    }
+
+    if (failedResponses.length > 0) {
+      // Partial success
+      success = true;
+      return res.status(207).json({
+        message: "Quiz answers partially submitted",
+        submitted: createdResponses.length,
+        failed: failedResponses.length,
+        totalScore: totalScore * (createdResponses.length / answers.length),
+        failures: failedResponses
+      });
+    }
+
+    // Complete success
     success = true;
     res.status(201).json({
       message: "Quiz answers submitted successfully",
       totalScore,
-      answersSubmitted: answers.length
+      answersSubmitted: createdResponses.length
     });
   } catch (error: any) {
     console.error("Error submitting quiz answers:", error);
@@ -184,13 +430,6 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
       });
     }
     
-    if (error.code === 'P2002') {
-      return res.status(400).json({ 
-        error: "Duplicate submission detected",
-        details: "This quiz has already been submitted"
-      });
-    }
-    
     res.status(500).json({ 
       error: "Internal server error",
     });
@@ -198,7 +437,6 @@ export const submitQuizAnswers = async (req: TenantRequest, res: Response) => {
     trackQuery(success);
   }
 };
-
 /**
  * Controller for getting quiz questions - OPTIMIZED
  */
