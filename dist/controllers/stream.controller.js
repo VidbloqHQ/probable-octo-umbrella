@@ -37,47 +37,28 @@ const TENANT_CONFIG_CACHE_TTL = 300000; // 5 minutes
 //   return `${generateMeetingLink()}-${Date.now()}`;
 // }
 /**
- * Helper function to generate a unique stream name - OPTIMIZED
+ * Helper function to generate a unique stream name - FIXED
  */
 async function generateUniqueStreamName(tenantId) {
     // Try up to 5 times
     for (let attempt = 0; attempt < 5; attempt++) {
         const streamName = generateMeetingLink();
-        try {
-            // Use create with unique constraint - will fail if exists
-            await executeQuery(() => db.stream.create({
-                data: {
-                    name: streamName,
-                    tenantId: tenantId,
-                    // Minimal required fields for reservation
-                    userId: "", // Will be updated later
-                    callType: "Video",
-                    streamSessionType: "Meeting",
-                    creatorWallet: "",
-                    isLive: false
-                },
-                select: { name: true }
-            }), { maxRetries: 1, timeout: 2000 });
-            // If successful, immediately delete and return the name
-            await executeQuery(() => db.stream.delete({
-                where: {
-                    name_tenantId: {
-                        name: streamName,
-                        tenantId: tenantId
-                    }
-                }
-            }), { maxRetries: 1, timeout: 2000 }).catch(() => { });
+        // Simply check if name exists - don't create a temporary stream
+        const existingStream = await executeQuery(() => db.stream.findFirst({
+            where: {
+                name: streamName,
+                tenantId: tenantId,
+            },
+            select: { id: true }
+        }), { maxRetries: 1, timeout: 2000 });
+        if (!existingStream) {
+            // Name is available
             return streamName;
         }
-        catch (error) {
-            if (error.code === 'P2002') {
-                // Unique constraint violation - try again
-                continue;
-            }
-            throw error;
-        }
+        // Name taken, try again
+        console.log(`Stream name ${streamName} already exists, trying again...`);
     }
-    // Fallback with timestamp
+    // Fallback with timestamp to ensure uniqueness
     return `${generateMeetingLink()}-${Date.now()}`;
 }
 /**
