@@ -606,36 +606,68 @@ export const getStreamAgenda = async (
     }
 
     // Get stream and its agendas
-    const stream = await db.stream.findFirst({
-      where: {
-        name: streamId,
-        tenantId: tenant.id,
-      },
-      include: {
-        agenda: {
-          include: {
-            pollContent: true,
-            quizContent: {
-              include: { questions: true }
-            },
-            qaContent: true,
-            customContent: true,
-            participantResponses: {
-              select: {
-                id: true,
-                responseType: true,
-                timestamp: true,
-                participantId: true
-              }
-            }
+    // const stream = await db.stream.findFirst({
+    //   where: {
+    //     name: streamId,
+    //     tenantId: tenant.id,
+    //   },
+    //   include: {
+    //     agenda: {
+    //       include: {
+    //         pollContent: true,
+    //         quizContent: {
+    //           include: { questions: true }
+    //         },
+    //         qaContent: true,
+    //         customContent: true,
+    //         participantResponses: {
+    //           select: {
+    //             id: true,
+    //             responseType: true,
+    //             timestamp: true,
+    //             participantId: true
+    //           }
+    //         }
+    //       },
+    //       orderBy: {
+    //         timeStamp: 'asc'
+    //       }
+    //     }
+    //   }
+    // });
+
+    const stream = await executeQuery(
+  () => db.stream.findFirst({
+    where: {
+      name: streamId,
+      tenantId: tenant.id,
+    },
+    include: {
+      agenda: {
+        include: {
+          pollContent: true,
+          quizContent: {
+            include: { questions: true }
           },
-          orderBy: {
-            timeStamp: 'asc'
+          qaContent: true,
+          customContent: true,
+          participantResponses: {
+            select: {
+              id: true,
+              responseType: true,
+              timestamp: true,
+              participantId: true
+            }
           }
+        },
+        orderBy: {
+          timeStamp: 'asc'
         }
       }
-    });
-
+    }
+  }),
+  { maxRetries: 2, timeout: 5000 }
+);
     if (!stream) {
       return res
         .status(404)
