@@ -177,6 +177,7 @@ model Stream {
   
   agenda       Agenda[]
   participants Participant[]
+  version      Int       @default(1)
   
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -368,7 +369,9 @@ model Participant {
   pollVotes     PollVote[]
   quizResponses QuizResponse[]
   responses     ParticipantResponse[]
+  version      Int       @default(1)
   
+  @@unique([walletAddress, streamId, tenantId])
   @@index([tenantId, streamId])
   @@index([walletAddress, streamId, tenantId]) // Add composite index for participant lookups
 }
@@ -468,4 +471,15 @@ model StreamDistribution {
   @@index([streamId])
   @@index([tenantId, userId])
   @@index([recipientWallet])
+}
+
+model IdempotencyKey {
+  id          String    @id @default(cuid())
+  key         String    @unique
+  response    Json
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime
+  
+  @@index([key])
+  @@index([expiresAt])
 }
