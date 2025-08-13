@@ -61,6 +61,41 @@ connectWithRetry().catch(error => {
   console.error('Failed to connect to database after retries:', error);
 });
 
+// Connection pool manager
+class QueryQueue {
+  private queue: Array<() => void> = [];
+  private activeQueries = 0;
+  private maxConcurrent = 15; // Limit for PgBouncer
+  
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
+    while (this.activeQueries >= this.maxConcurrent) {
+      await new Promise<void>(resolve => {
+        this.queue.push(resolve);
+      });
+    }
+    
+    this.activeQueries++;
+    
+    try {
+      return await fn();
+    } finally {
+      this.activeQueries--;
+      const next = this.queue.shift();
+      if (next) next();
+    }
+  }
+  
+  getStats() {
+    return {
+      active: this.activeQueries,
+      queued: this.queue.length,
+      maxConcurrent: this.maxConcurrent
+    };
+  }
+}
+
+const queryQueue = new QueryQueue();
+
 // CRITICAL: Wrapper for queries with connection pool management
 export async function executeQuery<T>(
   queryFn: () => Promise<T>,
@@ -76,61 +111,77 @@ export async function executeQuery<T>(
     retryDelay = 500
   } = options;
 
-  let lastError: any;
+  // Use the queue to limit concurrent queries
+  return queryQueue.execute(async () => {
+    let lastError: any;
 
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      // Create a promise that rejects after timeout
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Query timeout')), timeout);
-      });
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        // Create a promise that rejects after timeout
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Query timeout')), timeout);
+        });
 
-      // Race between query and timeout
-      const result = await Promise.race([
-        queryFn(),
-        timeoutPromise
-      ]);
-      
-      return result as T;
-    } catch (error: any) {
-      lastError = error;
-      
-      // Log connection pool errors
-      if (error.code === 'P2024') {
-        console.error(`[Connection Pool] Exhausted at attempt ${attempt + 1}`);
+        // Race between query and timeout
+        const result = await Promise.race([
+          queryFn(),
+          timeoutPromise
+        ]);
+        
+        return result as T;
+      } catch (error: any) {
+        lastError = error;
+        
+        // Log connection pool errors
+        if (error.code === 'P2024') {
+          console.error(`[Connection Pool] Exhausted at attempt ${attempt + 1}`);
+        }
+        
+        // Errors that should trigger retry
+        const retryableCodes = [
+          'P2024', // Connection pool timeout
+          'P2034', // Transaction write conflict
+          'P1001', // Can't reach database server
+          'P1002', // Database server timeout
+          'TIMEOUT' // Our custom timeout
+        ];
+        
+        const shouldRetry = retryableCodes.includes(error.code) || 
+                            error.message === 'Query timeout';
+        const isLastAttempt = attempt === maxRetries - 1;
+
+        if (!shouldRetry || isLastAttempt) {
+          throw error;
+        }
+
+        // Exponential backoff with jitter
+        const delay = Math.min(
+          retryDelay * Math.pow(2, attempt) + Math.random() * 200,
+          5000
+        );
+        
+        console.log(`[Retry ${attempt + 1}/${maxRetries}] Query failed with ${error.code}, retrying in ${delay}ms`);
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
-      
-      // Errors that should trigger retry
-      const retryableCodes = [
-        'P2024', // Connection pool timeout
-        'P2034', // Transaction write conflict
-        'P1001', // Can't reach database server
-        'P1002', // Database server timeout
-        'TIMEOUT' // Our custom timeout
-      ];
-      
-      const shouldRetry = retryableCodes.includes(error.code) || 
-                          error.message === 'Query timeout';
-      const isLastAttempt = attempt === maxRetries - 1;
-
-      if (!shouldRetry || isLastAttempt) {
-        throw error;
-      }
-
-      // Exponential backoff with jitter
-      const delay = Math.min(
-        retryDelay * Math.pow(2, attempt) + Math.random() * 200,
-        5000
-      );
-      
-      console.log(`[Retry ${attempt + 1}/${maxRetries}] Query failed with ${error.code}, retrying in ${delay}ms`);
-      
-      await new Promise(resolve => setTimeout(resolve, delay));
     }
-  }
 
-  throw lastError;
+    throw lastError;
+  });
 }
+
+// Export queue stats for monitoring
+export function getQueueStats() {
+  return queryQueue.getStats();
+}
+
+// Monitor queue status
+setInterval(() => {
+  const stats = queryQueue.getStats();
+  if (stats.active > 10 || stats.queued > 0) {
+    console.log('[Query Queue]', stats);
+  }
+}, 5000);
 
 // NO TRANSACTIONS - Just return the operation
 export async function executeTransaction<T>(
@@ -253,10 +304,19 @@ export type { PrismaClient } from "@prisma/client";
 // const prismaClientSingleton = () => {
 //   const isProduction = process.env.NODE_ENV === 'production';
   
+//   // Parse database URL to add pgbouncer parameters
+//   let databaseUrl = process.env.DATABASE_URL || '';
+  
+//   // Add pgbouncer=true and connection pooling parameters if not present
+//   if (!databaseUrl.includes('pgbouncer=true')) {
+//     const separator = databaseUrl.includes('?') ? '&' : '?';
+//     databaseUrl = `${databaseUrl}${separator}pgbouncer=true&connection_limit=20&pool_timeout=10`;
+//   }
+  
 //   console.log('Initializing Prisma Client', {
 //     environment: process.env.NODE_ENV || 'development',
-//     connectionType: 'Session Pooler',
-//     connectionLimit: process.env.DATABASE_CONNECTION_LIMIT || '50'
+//     connectionPool: 'PgBouncer Transaction Mode',
+//     connectionLimit: '20' // Reduced from 97
 //   });
 
 //   return new PrismaClient({
@@ -264,6 +324,11 @@ export type { PrismaClient } from "@prisma/client";
 //       ? ['error'] 
 //       : ['error', 'warn'],
 //     errorFormat: isProduction ? 'minimal' : 'pretty',
+//     datasources: {
+//       db: {
+//         url: databaseUrl
+//       }
+//     }
 //   });
 // };
 
@@ -274,21 +339,27 @@ export type { PrismaClient } from "@prisma/client";
 //   globalForPrisma.prisma = db;
 // }
 
-// // Connect eagerly to detect issues early
-// db.$connect()
-//   .then(() => {
-//     console.log('✅ Database connected successfully');
-//   })
-//   .catch((error) => {
-//     console.error('❌ Failed to connect to database:', error);
-//   });
+// // Connect with retry logic
+// async function connectWithRetry(retries = 3) {
+//   for (let i = 0; i < retries; i++) {
+//     try {
+//       await db.$connect();
+//       console.log('✅ Database connected successfully');
+//       return;
+//     } catch (error) {
+//       console.error(`❌ Database connection attempt ${i + 1} failed:`, error);
+//       if (i === retries - 1) throw error;
+//       await new Promise(resolve => setTimeout(resolve, 2000));
+//     }
+//   }
+// }
 
-// // CRITICAL: Set statement timeout to prevent hanging queries
-// db.$executeRawUnsafe('SET statement_timeout = 10000').catch(() => {
-//   // Ignore error if this fails
+// // Connect eagerly with retry
+// connectWithRetry().catch(error => {
+//   console.error('Failed to connect to database after retries:', error);
 // });
 
-// // Wrapper for queries with retry logic and timeout
+// // CRITICAL: Wrapper for queries with connection pool management
 // export async function executeQuery<T>(
 //   queryFn: () => Promise<T>,
 //   options: {
@@ -299,7 +370,7 @@ export type { PrismaClient } from "@prisma/client";
 // ): Promise<T> {
 //   const { 
 //     maxRetries = 2,
-//     timeout = 10000,
+//     timeout = 5000, // Reduced from 10000
 //     retryDelay = 500
 //   } = options;
 
@@ -307,28 +378,25 @@ export type { PrismaClient } from "@prisma/client";
 
 //   for (let attempt = 0; attempt < maxRetries; attempt++) {
 //     try {
-//       // Create abort controller for timeout
-//       const controller = new AbortController();
-//       const timeoutId = setTimeout(() => controller.abort(), timeout);
+//       // Create a promise that rejects after timeout
+//       const timeoutPromise = new Promise<never>((_, reject) => {
+//         setTimeout(() => reject(new Error('Query timeout')), timeout);
+//       });
 
-//       try {
-//         const result = await queryFn();
-//         clearTimeout(timeoutId);
-//         return result;
-//       } catch (error: any) {
-//         clearTimeout(timeoutId);
-        
-//         // If it's a timeout, throw immediately
-//         if (controller.signal.aborted) {
-//           const timeoutError = new Error('Query timeout');
-//           (timeoutError as any).code = 'TIMEOUT';
-//           throw timeoutError;
-//         }
-        
-//         throw error;
-//       }
+//       // Race between query and timeout
+//       const result = await Promise.race([
+//         queryFn(),
+//         timeoutPromise
+//       ]);
+      
+//       return result as T;
 //     } catch (error: any) {
 //       lastError = error;
+      
+//       // Log connection pool errors
+//       if (error.code === 'P2024') {
+//         console.error(`[Connection Pool] Exhausted at attempt ${attempt + 1}`);
+//       }
       
 //       // Errors that should trigger retry
 //       const retryableCodes = [
@@ -336,11 +404,11 @@ export type { PrismaClient } from "@prisma/client";
 //         'P2034', // Transaction write conflict
 //         'P1001', // Can't reach database server
 //         'P1002', // Database server timeout
-//         'P2010', // Query timeout
 //         'TIMEOUT' // Our custom timeout
 //       ];
       
-//       const shouldRetry = retryableCodes.includes(error.code);
+//       const shouldRetry = retryableCodes.includes(error.code) || 
+//                           error.message === 'Query timeout';
 //       const isLastAttempt = attempt === maxRetries - 1;
 
 //       if (!shouldRetry || isLastAttempt) {
@@ -362,67 +430,20 @@ export type { PrismaClient } from "@prisma/client";
 //   throw lastError;
 // }
 
-// // FIXED: Transaction wrapper that properly handles PgBouncer
+// // NO TRANSACTIONS - Just return the operation
 // export async function executeTransaction<T>(
 //   fn: (tx: any) => Promise<T>,
-//   options: {
-//     maxWait?: number;
-//     timeout?: number;
-//     isolationLevel?: any;
-//     retries?: number;
-//   } = {}
+//   options?: any
 // ): Promise<T> {
-//   const { 
-//     maxWait = 2000,  // Reduced from 5000
-//     timeout = 10000, // Reduced from 15000
-//     isolationLevel,
-//     retries = 1      // Reduced from 2 - transactions shouldn't retry much
-//   } = options;
-  
-//   // IMPORTANT: For PgBouncer, we need to be very careful with transactions
-//   let lastError: any;
-  
-//   for (let attempt = 0; attempt < retries; attempt++) {
-//     try {
-//       // Use interactive transactions with proper timeout
-//       const result = await db.$transaction(
-//         async (tx) => {
-//           // Set a statement timeout for this transaction
-//           await tx.$executeRawUnsafe('SET LOCAL statement_timeout = 10000');
-//           return await fn(tx);
-//         },
-//         {
-//           maxWait,
-//           timeout,
-//           isolationLevel: isolationLevel || undefined
-//         }
-//       );
-      
-//       return result;
-//     } catch (error: any) {
-//       lastError = error;
-      
-//       // Don't retry on transaction-specific errors
-//       if (error.code === 'P2028' || // Transaction already closed
-//           error.code === 'P2034' || // Write conflict
-//           attempt === retries - 1) {
-//         throw error;
-//       }
-      
-//       // Small delay before retry
-//       await new Promise(resolve => setTimeout(resolve, 500));
-//     }
-//   }
-  
-//   throw lastError;
+//   console.warn('executeTransaction called but transactions are disabled with PgBouncer');
+//   // Execute without transaction
+//   return fn(db);
 // }
 
 // // Optimized health check
 // export async function isDatabaseHealthy(): Promise<boolean> {
 //   try {
-//     const result = await db.$queryRawUnsafe<any[]>(
-//       'SELECT 1 as healthy'
-//     );
+//     await db.$queryRawUnsafe('SELECT 1');
 //     return true;
 //   } catch (error: any) {
 //     console.error('Health check failed:', error.message);
@@ -430,39 +451,21 @@ export type { PrismaClient } from "@prisma/client";
 //   }
 // }
 
-// // Get database metrics with connection cleanup check
+// // Get database metrics
 // export async function getDatabaseMetrics() {
 //   try {
-//     if (!process.env.DATABASE_URL?.includes('postgres')) {
-//       return { provider: 'non-postgresql', healthy: await isDatabaseHealthy() };
-//     }
-
-//     const stats = await db.$queryRaw<any[]>`
-//       SELECT 
-//         (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()) as total_connections,
-//         (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'active') as active_connections,
-//         (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'idle') as idle_connections,
-//         (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'idle in transaction') as idle_in_transaction,
-//         (SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event IS NOT NULL) as waiting_connections
-//     `;
-
-//     const result = stats[0] as any;
+//     // For Supabase/PgBouncer, we can't get detailed stats
+//     const result = await db.$queryRaw<any[]>`SELECT 1 as healthy`;
     
-//     // Log warning if too many idle in transaction
-//     if (result.idle_in_transaction > 5) {
-//       console.error(`⚠️ WARNING: ${result.idle_in_transaction} idle transactions detected!`);
-//     }
-
 //     return {
-//       provider: 'postgresql',
-//       ...result,
+//       provider: 'postgresql-pgbouncer',
 //       healthy: true,
-//       connectionLimit: process.env.DATABASE_CONNECTION_LIMIT || 'not set',
-//       warning: result.idle_in_transaction > 5 ? 'High number of idle transactions' : null
+//       connectionLimit: 20,
+//       note: 'Using PgBouncer transaction pooling mode'
 //     };
 //   } catch (error: any) {
 //     return {
-//       provider: 'postgresql',
+//       provider: 'postgresql-pgbouncer',
 //       healthy: false,
 //       error: error.message
 //     };
@@ -472,21 +475,25 @@ export type { PrismaClient } from "@prisma/client";
 // // Connection pool monitoring
 // let queryCount = 0;
 // let errorCount = 0;
-// let slowQueryCount = 0;
+// let poolExhaustedCount = 0;
 // let lastReset = Date.now();
 
-// export function trackQuery(success: boolean, duration?: number) {
+// export function trackQuery(success: boolean, error?: any) {
 //   queryCount++;
-//   if (!success) errorCount++;
-//   if (duration && duration > 1000) slowQueryCount++;
+//   if (!success) {
+//     errorCount++;
+//     if (error?.code === 'P2024') {
+//       poolExhaustedCount++;
+//     }
+//   }
   
 //   // Reset counters every hour
 //   const now = Date.now();
 //   if (now - lastReset > 3600000) {
-//     console.log(`[Prisma Stats] Last hour: ${queryCount} queries, ${errorCount} errors (${((errorCount/queryCount) * 100).toFixed(2)}% error rate), ${slowQueryCount} slow queries`);
+//     console.log(`[Prisma Stats] Last hour: ${queryCount} queries, ${errorCount} errors (${((errorCount/queryCount) * 100).toFixed(2)}% error rate), ${poolExhaustedCount} pool exhausted`);
 //     queryCount = 0;
 //     errorCount = 0;
-//     slowQueryCount = 0;
+//     poolExhaustedCount = 0;
 //     lastReset = now;
 //   }
 // }
@@ -497,44 +504,13 @@ export type { PrismaClient } from "@prisma/client";
 //   return {
 //     queryCount,
 //     errorCount,
-//     slowQueryCount,
+//     poolExhaustedCount,
 //     errorRate: queryCount > 0 ? (errorCount / queryCount) : 0,
-//     slowQueryRate: queryCount > 0 ? (slowQueryCount / queryCount) : 0,
+//     poolExhaustedRate: queryCount > 0 ? (poolExhaustedCount / queryCount) : 0,
 //     runtimeMs: runtime,
 //     averageQps: queryCount / (runtime / 1000)
 //   };
 // }
-
-// // Periodic connection cleanup
-// setInterval(async () => {
-//   try {
-//     // Check for idle transactions
-//     const idleCheck = await db.$queryRaw<any[]>`
-//       SELECT count(*) as idle_count 
-//       FROM pg_stat_activity 
-//       WHERE datname = current_database() 
-//       AND state = 'idle in transaction'
-//       AND state_change < NOW() - INTERVAL '30 seconds'
-//     `;
-    
-//     const idleCount = (idleCheck[0] as any).idle_count;
-    
-//     if (idleCount > 0) {
-//       console.warn(`Found ${idleCount} old idle transactions, cleaning up...`);
-      
-//       // Kill old idle transactions
-//       await db.$executeRawUnsafe(`
-//         SELECT pg_terminate_backend(pid)
-//         FROM pg_stat_activity
-//         WHERE datname = current_database()
-//         AND state = 'idle in transaction'
-//         AND state_change < NOW() - INTERVAL '30 seconds'
-//       `);
-//     }
-//   } catch (error) {
-//     console.error('Error in connection cleanup:', error);
-//   }
-// }, 60000); // Check every minute
 
 // // Graceful shutdown
 // async function cleanup() {
@@ -566,4 +542,3 @@ export type { PrismaClient } from "@prisma/client";
 // // Export Prisma types
 // export { Prisma } from "@prisma/client";
 // export type { PrismaClient } from "@prisma/client";
-

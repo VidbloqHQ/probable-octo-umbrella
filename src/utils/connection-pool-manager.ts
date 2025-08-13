@@ -1,4 +1,4 @@
-import { db, executeQuery } from "../prisma.js";
+import { executeQuery } from "../prisma.js";
 
 class ConnectionPoolManager {
   private activeQueries = new Set<string>();
