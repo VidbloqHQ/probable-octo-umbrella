@@ -5,15 +5,68 @@ import { isValidWalletAddress } from "../utils/index.js";
 const authCache = new Map();
 const AUTH_CACHE_TTL = 30000; // 30 seconds
 // Helper to get cached or fetch authorization data
+// async function getAuthorizationData(
+//   streamId: string,
+//   wallet: string,
+//   tenantId: string
+// ) {
+//   const cacheKey = `${streamId}:${wallet}:${tenantId}`;
+//   const cached = authCache.get(cacheKey);
+//   if (cached && Date.now() - cached.timestamp < AUTH_CACHE_TTL) {
+//     return cached.data;
+//   }
+//   // Parallel fetch stream and user data
+//   const [stream, requestingUser] = await Promise.all([
+//     db.stream.findFirst({
+//       where: {
+//         name: streamId,
+//         tenantId,
+//       },
+//       select: {
+//         id: true,
+//         userId: true,
+//         creatorWallet: true,
+//         isLive: true,
+//         participants: {
+//           where: {
+//             walletAddress: wallet,
+//             userType: "co-host",
+//             leftAt: null
+//           },
+//           select: { id: true }
+//         }
+//       }
+//     }),
+//     db.user.findFirst({
+//       where: {
+//         walletAddress: wallet,
+//         tenantId,
+//       },
+//       select: { id: true }
+//     })
+//   ]);
+//   const data = { stream, requestingUser };
+//   authCache.set(cacheKey, { data, timestamp: Date.now() });
+//   // Clean old cache entries
+//   if (authCache.size > 100) {
+//     const now = Date.now();
+//     for (const [key, value] of authCache.entries()) {
+//       if (now - value.timestamp > AUTH_CACHE_TTL) {
+//         authCache.delete(key);
+//       }
+//     }
+//   }
+//   return data;
+// }
 async function getAuthorizationData(streamId, wallet, tenantId) {
     const cacheKey = `${streamId}:${wallet}:${tenantId}`;
     const cached = authCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < AUTH_CACHE_TTL) {
         return cached.data;
     }
-    // Parallel fetch stream and user data
+    // Parallel fetch stream and user data with timeout
     const [stream, requestingUser] = await Promise.all([
-        db.stream.findFirst({
+        executeQuery(() => db.stream.findFirst({
             where: {
                 name: streamId,
                 tenantId,
@@ -29,17 +82,18 @@ async function getAuthorizationData(streamId, wallet, tenantId) {
                         userType: "co-host",
                         leftAt: null
                     },
-                    select: { id: true }
+                    select: { id: true },
+                    take: 1
                 }
             }
-        }),
-        db.user.findFirst({
+        }), { maxRetries: 1, timeout: 3000 }),
+        executeQuery(() => db.user.findFirst({
             where: {
                 walletAddress: wallet,
                 tenantId,
             },
             select: { id: true }
-        })
+        }), { maxRetries: 1, timeout: 3000 })
     ]);
     const data = { stream, requestingUser };
     authCache.set(cacheKey, { data, timestamp: Date.now() });
@@ -55,18 +109,17 @@ async function getAuthorizationData(streamId, wallet, tenantId) {
     return data;
 }
 /**
- * Controller for creating agenda items for a stream - OPTIMIZED VERSION
+ * Controller for creating agenda items - REFACTORED WITHOUT TRANSACTIONS
  */
 // export const createAgenda = async (req: TenantRequest, res: Response) => {
 //   const { streamId } = req.params; 
 //   const { agendas, wallet } = req.body;
 //   const tenant = req.tenant;
+//   let success = false;
 //   try {
-//     // 1. Tenant verification
 //     if (!tenant) {
 //       return res.status(401).json({ error: "Tenant authentication required." });
 //     }
-//     // 2. Input validation
 //     if (!streamId || !agendas || !wallet) {
 //       return res.status(400).json({ 
 //         error: "Missing required fields: streamId, agendas, or wallet" 
@@ -75,188 +128,246 @@ async function getAuthorizationData(streamId, wallet, tenantId) {
 //     if (!isValidWalletAddress(wallet)) {
 //       return res.status(400).json({ error: "Invalid wallet address format." });
 //     }
-//     // 3. Get authorization data (cached)
-//     const { stream, requestingUser } = await getAuthorizationData(
-//       streamId,
-//       wallet,
-//       tenant.id
-//     );
-//     // 4. Validate stream exists
+//     // Get authorization data
+//     const [stream, requestingUser] = await Promise.all([
+//       executeQuery(
+//         () => db.stream.findFirst({
+//           where: {
+//             name: streamId,
+//             tenantId: tenant.id,
+//           },
+//           select: {
+//             id: true,
+//             userId: true,
+//             creatorWallet: true,
+//             isLive: true,
+//           }
+//         }),
+//         { maxRetries: 2, timeout: 5000 }
+//       ),
+//       executeQuery(
+//         () => db.user.findFirst({
+//           where: {
+//             walletAddress: wallet,
+//             tenantId: tenant.id,
+//           },
+//           select: { id: true }
+//         }),
+//         { maxRetries: 2, timeout: 5000 }
+//       )
+//     ]);
 //     if (!stream) {
 //       return res.status(404).json({ 
 //         error: "Stream not found",
 //         details: `Stream ${streamId} not found`
 //       });
 //     }
-//     // 5. Validate user exists
 //     if (!requestingUser) {
 //       return res.status(403).json({ error: "User not authorized." });
 //     }
-//     // 6. Check permissions (now with data already loaded)
+//     // Check permissions
 //     const isHost = requestingUser.id === stream.userId;
-//     const isCoHost = stream.participants && stream.participants.length > 0;
+//     const isCoHost = await executeQuery(
+//       () => db.participant.findFirst({
+//         where: {
+//           walletAddress: wallet,
+//           streamId: stream.id,
+//           userType: "co-host",
+//           tenantId: tenant.id,
+//           leftAt: null
+//         },
+//         select: { id: true }
+//       }),
+//       { maxRetries: 1, timeout: 3000 }
+//     );
 //     if (!isHost && !isCoHost) {
 //       return res.status(403).json({ 
 //         error: "Only hosts and co-hosts can create agendas",
 //         requiredRole: "host or co-host"
 //       });
 //     }
-//     // 7. Validate ALL agendas before any DB operations
-//     const preparedAgendas: any[] = [];
+//     // Create agendas individually (not in transaction)
+//     const createdAgendas: any[] = [];
+//     const failedAgendas: any[] = [];
 //     for (const [index, agenda] of agendas.entries()) {
-//       // Validate required agenda fields
-//       if (typeof agenda.timeStamp !== 'number' || agenda.timeStamp < 0) {
-//         return res.status(400).json({ 
-//           error: `Agenda ${index + 1}: Invalid timeStamp (must be positive number)`,
-//           agendaIndex: index
-//         });
-//       }
-//       if (!agenda.action || typeof agenda.action !== 'string') {
-//         return res.status(400).json({
-//           error: `Agenda ${index + 1}: Action is required`,
-//           agendaIndex: index
-//         });
-//       }
-//       // Validate action enum
-//       const actionInput = agenda.action;
-//       if (!Object.values(AgendaAction).includes(actionInput as any)) {
-//         return res.status(400).json({
-//           error: `Agenda ${index + 1}: Invalid action type`,
-//           validActions: Object.values(AgendaAction),
-//           agendaIndex: index
-//         });
-//       }
-//       const actionEnum = actionInput as AgendaAction;
-//       // Validate title requirement based on action type
-//       if ((actionEnum === AgendaAction.Poll || 
-//            actionEnum === AgendaAction.Q_A || 
-//            actionEnum === AgendaAction.Quiz || 
-//            actionEnum === AgendaAction.Custom) && 
-//           (!agenda.title || typeof agenda.title !== 'string')) {
-//         return res.status(400).json({
-//           error: `Agenda ${index + 1}: Title is required for ${actionEnum} agenda`,
-//           agendaIndex: index
-//         });
-//       }
-//       // Prepare agenda data based on type
-//       const baseData = {
-//         streamId: stream.id,
-//         timeStamp: agenda.timeStamp,
-//         action: actionEnum,
-//         title: agenda.title || null,
-//         description: agenda.description || null,
-//         duration: agenda.duration || null,
-//         tenantId: tenant.id,
-//       };
-//       switch (actionEnum) {
-//         case AgendaAction.Poll:
-//           if (!agenda.options || !Array.isArray(agenda.options) || agenda.options.length < 2) {
-//             return res.status(400).json({
-//               error: `Agenda ${index + 1}: Poll requires at least 2 options`,
-//               agendaIndex: index
-//             });
-//           }
-//           preparedAgendas.push({
-//             ...baseData,
-//             pollContent: {
-//               create: {
-//                 options: agenda.options,
-//                 totalVotes: 0
-//               }
+//       try {
+//         // Validate agenda
+//         if (typeof agenda.timeStamp !== 'number' || agenda.timeStamp < 0) {
+//           throw new Error(`Invalid timeStamp (must be positive number)`);
+//         }
+//         if (!agenda.action || !Object.values(AgendaAction).includes(agenda.action as any)) {
+//           throw new Error(`Invalid action type`);
+//         }
+//         const actionEnum = agenda.action as AgendaAction;
+//         // Base agenda data
+//         const baseAgendaData = {
+//           streamId: stream.id,
+//           timeStamp: agenda.timeStamp,
+//           action: actionEnum,
+//           title: agenda.title || null,
+//           description: agenda.description || null,
+//           duration: agenda.duration || null,
+//           tenantId: tenant.id,
+//         };
+//         let createdAgenda: any;
+//         // Create based on type
+//         switch (actionEnum) {
+//           case AgendaAction.Poll:
+//             if (!agenda.options || !Array.isArray(agenda.options) || agenda.options.length < 2) {
+//               throw new Error(`Poll requires at least 2 options`);
 //             }
-//           });
-//           break;
-//         case AgendaAction.Quiz:
-//           if (!agenda.questions || !Array.isArray(agenda.questions) || agenda.questions.length < 1) {
-//             return res.status(400).json({
-//               error: `Agenda ${index + 1}: Quiz requires at least 1 question`,
-//               agendaIndex: index
-//             });
-//           }
-//           // Validate all questions
-//           for (const question of agenda.questions) {
-//             if (!question.questionText || !question.options || !question.correctAnswer) {
-//               return res.status(400).json({
-//                 error: `Agenda ${index + 1}: Each quiz question requires questionText, options, and correctAnswer`,
-//                 agendaIndex: index
+//             // Create agenda first
+//             createdAgenda = await executeQuery(
+//               () => db.agenda.create({
+//                 data: baseAgendaData,
+//                 include: { pollContent: true }
+//               }),
+//               { maxRetries: 2, timeout: 5000 }
+//             );
+//             // Then create poll content
+//             await executeQuery(
+//               () => db.pollContent.create({
+//                 data: {
+//                   agendaId: createdAgenda.id,
+//                   options: agenda.options,
+//                   totalVotes: 0
+//                 }
+//               }),
+//               { maxRetries: 2, timeout: 5000 }
+//             );
+//             break;
+//           case AgendaAction.Quiz:
+//             if (!agenda.questions || !Array.isArray(agenda.questions) || agenda.questions.length < 1) {
+//               throw new Error(`Quiz requires at least 1 question`);
+//             }
+//             // Create agenda first
+//             createdAgenda = await executeQuery(
+//               () => db.agenda.create({
+//                 data: baseAgendaData,
+//                 include: { quizContent: true }
+//               }),
+//               { maxRetries: 2, timeout: 5000 }
+//             );
+//             // Create quiz content
+//             const quizContent = await executeQuery(
+//               () => db.quizContent.create({
+//                 data: {
+//                   agendaId: createdAgenda.id
+//                 }
+//               }),
+//               { maxRetries: 2, timeout: 5000 }
+//             );
+//             // Create questions individually
+//             for (const question of agenda.questions) {
+//               await executeQuery(
+//                 () => db.quizQuestion.create({
+//                   data: {
+//                     quizContentId: quizContent.id,
+//                     questionText: question.questionText,
+//                     options: question.options,
+//                     correctAnswer: question.correctAnswer,
+//                     isMultiChoice: question.isMultiChoice ?? true,
+//                     points: question.points ?? 1
+//                   }
+//                 }),
+//                 { maxRetries: 1, timeout: 3000 }
+//               ).catch(err => {
+//                 console.error(`Failed to create quiz question: ${err.message}`);
 //               });
 //             }
-//           }
-//           preparedAgendas.push({
-//             ...baseData,
-//             quizContent: {
-//               create: {
-//                 questions: {
-//                   create: agenda.questions.map((q: any) => ({
-//                     questionText: q.questionText,
-//                     options: q.options,
-//                     correctAnswer: q.correctAnswer,
-//                     isMultiChoice: q.isMultiChoice ?? true,
-//                     points: q.points ?? 1
-//                   }))
+//             break;
+//           case AgendaAction.Q_A:
+//             createdAgenda = await executeQuery(
+//               () => db.agenda.create({
+//                 data: baseAgendaData,
+//                 include: { qaContent: true }
+//               }),
+//               { maxRetries: 2, timeout: 5000 }
+//             );
+//             await executeQuery(
+//               () => db.qAContent.create({
+//                 data: {
+//                   agendaId: createdAgenda.id,
+//                   topic: agenda.topic || agenda.title || null
 //                 }
-//               }
+//               }),
+//               { maxRetries: 2, timeout: 5000 }
+//             );
+//             break;
+//           case AgendaAction.Custom:
+//           default:
+//             createdAgenda = await executeQuery(
+//               () => db.agenda.create({
+//                 data: baseAgendaData,
+//                 include: { customContent: true }
+//               }),
+//               { maxRetries: 2, timeout: 5000 }
+//             );
+//             await executeQuery(
+//               () => db.customContent.create({
+//                 data: {
+//                   agendaId: createdAgenda.id,
+//                   customData: agenda.customData || {}
+//                 }
+//               }),
+//               { maxRetries: 2, timeout: 5000 }
+//             );
+//             break;
+//         }
+//         // Fetch complete agenda with all relations
+//         const completeAgenda = await executeQuery(
+//           () => db.agenda.findUnique({
+//             where: { id: createdAgenda.id },
+//             include: {
+//               pollContent: true,
+//               quizContent: {
+//                 include: { questions: true }
+//               },
+//               qaContent: true,
+//               customContent: true
 //             }
-//           });
-//           break;
-//         case AgendaAction.Q_A:
-//           preparedAgendas.push({
-//             ...baseData,
-//             qaContent: {
-//               create: {
-//                 topic: agenda.topic || agenda.title || null
-//               }
-//             }
-//           });
-//           break;
-//         case AgendaAction.Custom:
-//         default:
-//           preparedAgendas.push({
-//             ...baseData,
-//             customContent: {
-//               create: {
-//                 customData: agenda.customData || {}
-//               }
-//             }
-//           });
-//           break;
+//           }),
+//           { maxRetries: 1, timeout: 3000 }
+//         );
+//         createdAgendas.push(completeAgenda);
+//       } catch (error: any) {
+//         console.error(`Failed to create agenda ${index + 1}:`, error);
+//         failedAgendas.push({
+//           index,
+//           error: error.message
+//         });
 //       }
 //     }
-//     // 8. Create all agendas in a single transaction for consistency
-//     const createdAgendas = await db.$transaction(
-//       preparedAgendas.map(agendaData => 
-//         db.agenda.create({
-//           data: agendaData,
-//           include: {
-//             pollContent: true,
-//             quizContent: {
-//               include: { questions: true }
-//             },
-//             qaContent: true,
-//             customContent: true
-//           }
-//         })
-//       )
-//     );
+//     // Return appropriate response
+//     if (createdAgendas.length === 0) {
+//       return res.status(400).json({
+//         error: "Failed to create any agendas",
+//         failures: failedAgendas
+//       });
+//     }
+//     if (failedAgendas.length > 0) {
+//       // Partial success
+//       success = true;
+//       return res.status(207).json({
+//         created: createdAgendas,
+//         failed: failedAgendas,
+//         message: `Created ${createdAgendas.length} of ${agendas.length} agendas`
+//       });
+//     }
+//     // Complete success
+//     success = true;
 //     res.status(201).json(createdAgendas);
 //   } catch (error) {
 //     console.error("Error creating agenda:", error);
-//     // More detailed error response for debugging
-//     if (process.env.NODE_ENV === 'development') {
-//       res.status(500).json({ 
-//         error: "Internal server error",
-//         details: error instanceof Error ? error.message : 'Unknown error',
-//         stack: error instanceof Error ? error.stack : undefined
-//       });
-//     } else {
-//       res.status(500).json({ 
-//         error: "Internal server error"
-//       });
-//     }
+//     res.status(500).json({ 
+//       error: "Internal server error"
+//     });
+//   } finally {
+//     trackQuery(success);
 //   }
 // };
 /**
- * Controller for creating agenda items - REFACTORED WITHOUT TRANSACTIONS
+ * Controller for creating agenda items - FIXED
  */
 export const createAgenda = async (req, res) => {
     const { streamId } = req.params;
@@ -275,28 +386,12 @@ export const createAgenda = async (req, res) => {
         if (!isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Invalid wallet address format." });
         }
-        // Get authorization data
-        const [stream, requestingUser] = await Promise.all([
-            executeQuery(() => db.stream.findFirst({
-                where: {
-                    name: streamId,
-                    tenantId: tenant.id,
-                },
-                select: {
-                    id: true,
-                    userId: true,
-                    creatorWallet: true,
-                    isLive: true,
-                }
-            }), { maxRetries: 2, timeout: 5000 }),
-            executeQuery(() => db.user.findFirst({
-                where: {
-                    walletAddress: wallet,
-                    tenantId: tenant.id,
-                },
-                select: { id: true }
-            }), { maxRetries: 2, timeout: 5000 })
+        // Get authorization data with timeout
+        const authData = await Promise.race([
+            getAuthorizationData(streamId, wallet, tenant.id),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Authorization timeout')), 5000))
         ]);
+        const { stream, requestingUser } = authData;
         if (!stream) {
             return res.status(404).json({
                 error: "Stream not found",
@@ -308,23 +403,14 @@ export const createAgenda = async (req, res) => {
         }
         // Check permissions
         const isHost = requestingUser.id === stream.userId;
-        const isCoHost = await executeQuery(() => db.participant.findFirst({
-            where: {
-                walletAddress: wallet,
-                streamId: stream.id,
-                userType: "co-host",
-                tenantId: tenant.id,
-                leftAt: null
-            },
-            select: { id: true }
-        }), { maxRetries: 1, timeout: 3000 });
+        const isCoHost = stream.participants && stream.participants.length > 0;
         if (!isHost && !isCoHost) {
             return res.status(403).json({
                 error: "Only hosts and co-hosts can create agendas",
                 requiredRole: "host or co-host"
             });
         }
-        // Create agendas individually (not in transaction)
+        // Create agendas individually with timeout handling
         const createdAgendas = [];
         const failedAgendas = [];
         for (const [index, agenda] of agendas.entries()) {
@@ -348,7 +434,7 @@ export const createAgenda = async (req, res) => {
                     tenantId: tenant.id,
                 };
                 let createdAgenda;
-                // Create based on type
+                // Create based on type with timeout
                 switch (actionEnum) {
                     case AgendaAction.Poll:
                         if (!agenda.options || !Array.isArray(agenda.options) || agenda.options.length < 2) {
@@ -358,7 +444,7 @@ export const createAgenda = async (req, res) => {
                         createdAgenda = await executeQuery(() => db.agenda.create({
                             data: baseAgendaData,
                             include: { pollContent: true }
-                        }), { maxRetries: 2, timeout: 5000 });
+                        }), { maxRetries: 1, timeout: 3000 });
                         // Then create poll content
                         await executeQuery(() => db.pollContent.create({
                             data: {
@@ -366,7 +452,7 @@ export const createAgenda = async (req, res) => {
                                 options: agenda.options,
                                 totalVotes: 0
                             }
-                        }), { maxRetries: 2, timeout: 5000 });
+                        }), { maxRetries: 1, timeout: 3000 });
                         break;
                     case AgendaAction.Quiz:
                         if (!agenda.questions || !Array.isArray(agenda.questions) || agenda.questions.length < 1) {
@@ -376,15 +462,15 @@ export const createAgenda = async (req, res) => {
                         createdAgenda = await executeQuery(() => db.agenda.create({
                             data: baseAgendaData,
                             include: { quizContent: true }
-                        }), { maxRetries: 2, timeout: 5000 });
+                        }), { maxRetries: 1, timeout: 3000 });
                         // Create quiz content
                         const quizContent = await executeQuery(() => db.quizContent.create({
                             data: {
                                 agendaId: createdAgenda.id
                             }
-                        }), { maxRetries: 2, timeout: 5000 });
-                        // Create questions individually
-                        for (const question of agenda.questions) {
+                        }), { maxRetries: 1, timeout: 3000 });
+                        // Create questions individually with timeout
+                        for (const question of agenda.questions.slice(0, 10)) { // Limit to 10 questions
                             await executeQuery(() => db.quizQuestion.create({
                                 data: {
                                     quizContentId: quizContent.id,
@@ -394,7 +480,7 @@ export const createAgenda = async (req, res) => {
                                     isMultiChoice: question.isMultiChoice ?? true,
                                     points: question.points ?? 1
                                 }
-                            }), { maxRetries: 1, timeout: 3000 }).catch(err => {
+                            }), { maxRetries: 1, timeout: 2000 }).catch(err => {
                                 console.error(`Failed to create quiz question: ${err.message}`);
                             });
                         }
@@ -403,26 +489,26 @@ export const createAgenda = async (req, res) => {
                         createdAgenda = await executeQuery(() => db.agenda.create({
                             data: baseAgendaData,
                             include: { qaContent: true }
-                        }), { maxRetries: 2, timeout: 5000 });
+                        }), { maxRetries: 1, timeout: 3000 });
                         await executeQuery(() => db.qAContent.create({
                             data: {
                                 agendaId: createdAgenda.id,
                                 topic: agenda.topic || agenda.title || null
                             }
-                        }), { maxRetries: 2, timeout: 5000 });
+                        }), { maxRetries: 1, timeout: 3000 });
                         break;
                     case AgendaAction.Custom:
                     default:
                         createdAgenda = await executeQuery(() => db.agenda.create({
                             data: baseAgendaData,
                             include: { customContent: true }
-                        }), { maxRetries: 2, timeout: 5000 });
+                        }), { maxRetries: 1, timeout: 3000 });
                         await executeQuery(() => db.customContent.create({
                             data: {
                                 agendaId: createdAgenda.id,
                                 customData: agenda.customData || {}
                             }
-                        }), { maxRetries: 2, timeout: 5000 });
+                        }), { maxRetries: 1, timeout: 3000 });
                         break;
                 }
                 // Fetch complete agenda with all relations
@@ -431,7 +517,11 @@ export const createAgenda = async (req, res) => {
                     include: {
                         pollContent: true,
                         quizContent: {
-                            include: { questions: true }
+                            include: {
+                                questions: {
+                                    take: 10 // Limit questions
+                                }
+                            }
                         },
                         qaContent: true,
                         customContent: true
@@ -441,6 +531,14 @@ export const createAgenda = async (req, res) => {
             }
             catch (error) {
                 console.error(`Failed to create agenda ${index + 1}:`, error);
+                if (error.message === 'Query timeout') {
+                    // If we timeout, stop creating more agendas
+                    failedAgendas.push({
+                        index,
+                        error: 'Database timeout - please try again with fewer agendas'
+                    });
+                    break;
+                }
                 failedAgendas.push({
                     index,
                     error: error.message
@@ -469,6 +567,12 @@ export const createAgenda = async (req, res) => {
     }
     catch (error) {
         console.error("Error creating agenda:", error);
+        if (error.message === 'Authorization timeout' || error.message === 'Query timeout') {
+            return res.status(504).json({
+                error: "Request timeout",
+                message: "The operation took too long. Please try again."
+            });
+        }
         res.status(500).json({
             error: "Internal server error"
         });
@@ -480,47 +584,108 @@ export const createAgenda = async (req, res) => {
 /**
  * Controller for getting all stream's agendas - OPTIMIZED
  */
+// export const getStreamAgenda = async (
+//   req: TenantRequest,
+//   res: Response
+// ) => {
+//   const { streamId } = req.params;
+//   const tenant = req.tenant;
+//   try {
+//     // Tenant check
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });
+//     }
+//     if (!streamId) {
+//       return res.status(400).json({ error: "Missing livestream ID" });
+//     }
+//     // Get stream and its agendas
+//     // const stream = await db.stream.findFirst({
+//     //   where: {
+//     //     name: streamId,
+//     //     tenantId: tenant.id,
+//     //   },
+//     //   include: {
+//     //     agenda: {
+//     //       include: {
+//     //         pollContent: true,
+//     //         quizContent: {
+//     //           include: { questions: true }
+//     //         },
+//     //         qaContent: true,
+//     //         customContent: true,
+//     //         participantResponses: {
+//     //           select: {
+//     //             id: true,
+//     //             responseType: true,
+//     //             timestamp: true,
+//     //             participantId: true
+//     //           }
+//     //         }
+//     //       },
+//     //       orderBy: {
+//     //         timeStamp: 'asc'
+//     //       }
+//     //     }
+//     //   }
+//     // });
+//     const stream = await executeQuery(
+//   () => db.stream.findFirst({
+//     where: {
+//       name: streamId,
+//       tenantId: tenant.id,
+//     },
+//     include: {
+//       agenda: {
+//         include: {
+//           pollContent: true,
+//           quizContent: {
+//             include: { questions: true }
+//           },
+//           qaContent: true,
+//           customContent: true,
+//           participantResponses: {
+//             select: {
+//               id: true,
+//               responseType: true,
+//               timestamp: true,
+//               participantId: true
+//             }
+//           }
+//         },
+//         orderBy: {
+//           timeStamp: 'asc'
+//         }
+//       }
+//     }
+//   }),
+//   { maxRetries: 2, timeout: 5000 }
+// );
+//     if (!stream) {
+//       return res
+//         .status(404)
+//         .json({ error: "Stream not found in your tenant" });
+//     }
+//     res.status(200).json(stream.agenda);
+//   } catch (error) {
+//     console.error("Error fetching agendas:", error);
+//     res.status(500).json({ error: "Internal server error" });
+//   }
+// };
+/**
+ * Controller for getting all stream's agendas - FIXED
+ */
 export const getStreamAgenda = async (req, res) => {
     const { streamId } = req.params;
     const tenant = req.tenant;
+    let success = false;
     try {
-        // Tenant check
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
         if (!streamId) {
             return res.status(400).json({ error: "Missing livestream ID" });
         }
-        // Get stream and its agendas
-        // const stream = await db.stream.findFirst({
-        //   where: {
-        //     name: streamId,
-        //     tenantId: tenant.id,
-        //   },
-        //   include: {
-        //     agenda: {
-        //       include: {
-        //         pollContent: true,
-        //         quizContent: {
-        //           include: { questions: true }
-        //         },
-        //         qaContent: true,
-        //         customContent: true,
-        //         participantResponses: {
-        //           select: {
-        //             id: true,
-        //             responseType: true,
-        //             timestamp: true,
-        //             participantId: true
-        //           }
-        //         }
-        //       },
-        //       orderBy: {
-        //         timeStamp: 'asc'
-        //       }
-        //     }
-        //   }
-        // });
+        // Get stream and its agendas with timeout and limits
         const stream = await executeQuery(() => db.stream.findFirst({
             where: {
                 name: streamId,
@@ -531,7 +696,11 @@ export const getStreamAgenda = async (req, res) => {
                     include: {
                         pollContent: true,
                         quizContent: {
-                            include: { questions: true }
+                            include: {
+                                questions: {
+                                    take: 10 // Limit questions per quiz
+                                }
+                            }
                         },
                         qaContent: true,
                         customContent: true,
@@ -541,25 +710,37 @@ export const getStreamAgenda = async (req, res) => {
                                 responseType: true,
                                 timestamp: true,
                                 participantId: true
-                            }
+                            },
+                            take: 50 // Limit responses
                         }
                     },
                     orderBy: {
                         timeStamp: 'asc'
-                    }
+                    },
+                    take: 50 // Limit agendas
                 }
             }
-        }), { maxRetries: 2, timeout: 5000 });
+        }), { maxRetries: 1, timeout: 5000 });
         if (!stream) {
             return res
                 .status(404)
                 .json({ error: "Stream not found in your tenant" });
         }
+        success = true;
         res.status(200).json(stream.agenda);
     }
     catch (error) {
         console.error("Error fetching agendas:", error);
+        if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+            return res.status(504).json({
+                error: "Database query timeout",
+                message: "The request took too long. Please try again."
+            });
+        }
         res.status(500).json({ error: "Internal server error" });
+    }
+    finally {
+        trackQuery(success);
     }
 };
 /**
@@ -848,71 +1029,76 @@ export const updateStreamAgenda = async (req, res) => {
     }
 };
 /**
- * Controller for deleting a stream's agenda - OPTIMIZED
+ * Controller for deleting agenda - REFACTORED WITH COMPENSATION
  */
 // export const deleteAgenda = async (req: TenantRequest, res: Response) => {
 //   const { agendaId, wallet } = req.params;
 //   const tenant = req.tenant;
+//   let success = false;
 //   try {
-//     // 1. Tenant verification
 //     if (!tenant) {
 //       return res.status(401).json({ error: "Tenant authentication required." });
 //     }
-//     // 2. Input validation
-//     if (!agendaId) {
-//       return res.status(400).json({ error: "Missing agenda ID" });
+//     if (!agendaId || !wallet || !isValidWalletAddress(wallet)) {
+//       return res.status(400).json({ error: "Invalid parameters" });
 //     }
-//     if (!wallet || typeof wallet !== "string") {
-//       return res.status(400).json({ error: "Valid wallet address is required." });
-//     }
-//     if (!isValidWalletAddress(wallet)) {
-//       return res.status(400).json({ error: "Invalid wallet address format." });
-//     }
-//     // 3. Get agenda with minimal required data
-//     const existingAgenda = await db.agenda.findFirst({
-//       where: {
-//         id: agendaId,
-//         tenantId: tenant.id,
-//       },
-//       select: {
-//         id: true,
-//         streamId: true,
-//         stream: {
-//           select: {
-//             id: true,
-//             name: true,
-//             userId: true
+//     // Get agenda
+//     const existingAgenda = await executeQuery(
+//       () => db.agenda.findFirst({
+//         where: {
+//           id: agendaId,
+//           tenantId: tenant.id,
+//         },
+//         select: {
+//           id: true,
+//           streamId: true,
+//           action: true,
+//           stream: {
+//             select: {
+//               id: true,
+//               name: true,
+//               userId: true
+//             }
 //           }
 //         }
-//       }
-//     });
+//       }),
+//       { maxRetries: 2, timeout: 5000 }
+//     );
 //     if (!existingAgenda) {
 //       return res.status(404).json({ 
 //         error: "Agenda not found",
 //         details: `Agenda ${agendaId} not found`
 //       });
 //     }
-//     // 4. Verify requesting user has permissions (use cached auth)
-//     const { requestingUser } = await getAuthorizationData(
-//       existingAgenda.stream.name,
-//       wallet,
-//       tenant.id
+//     // Verify permissions
+//     const requestingUser = await executeQuery(
+//       () => db.user.findFirst({
+//         where: {
+//           walletAddress: wallet,
+//           tenantId: tenant.id
+//         },
+//         select: { id: true }
+//       }),
+//       { maxRetries: 1, timeout: 3000 }
 //     );
 //     if (!requestingUser) {
 //       return res.status(403).json({ error: "User not authorized." });
 //     }
 //     const isHost = requestingUser.id === existingAgenda.stream.userId;
 //     if (!isHost) {
-//       const isCoHost = await db.participant.findFirst({
-//         where: {
-//           walletAddress: wallet,
-//           streamId: existingAgenda.stream.id,
-//           userType: "co-host",
-//           tenantId: tenant.id,
-//           leftAt: null
-//         },
-//         select: { id: true }
-//       });
+//       const isCoHost = await executeQuery(
+//         () => db.participant.findFirst({
+//           where: {
+//             walletAddress: wallet,
+//             streamId: existingAgenda.stream.id,
+//             userType: "co-host",
+//             tenantId: tenant.id,
+//             leftAt: null
+//           },
+//           select: { id: true }
+//         }),
+//         { maxRetries: 1, timeout: 3000 }
+//       );
 //       if (!isCoHost) {
 //         return res.status(403).json({ 
 //           error: "Only hosts and co-hosts can delete agendas",
@@ -920,10 +1106,14 @@ export const updateStreamAgenda = async (req, res) => {
 //         });
 //       }
 //     }
-//     // 5. Delete agenda (cascade will handle all related content)
-//     await db.agenda.delete({
-//       where: { id: agendaId },
-//     });
+//     // Delete agenda (cascade will handle related content)
+//     await executeQuery(
+//       () => db.agenda.delete({
+//         where: { id: agendaId },
+//       }),
+//       { maxRetries: 2, timeout: 5000 }
+//     );
+//     success = true;
 //     res.status(200).json({
 //       message: "Agenda deleted successfully",
 //       deletedId: agendaId,
@@ -934,10 +1124,12 @@ export const updateStreamAgenda = async (req, res) => {
 //     res.status(500).json({ 
 //       error: "Internal server error",
 //     });
+//   } finally {
+//     trackQuery(success);
 //   }
 // };
 /**
- * Controller for deleting agenda - REFACTORED WITH COMPENSATION
+ * Controller for deleting agenda - FIXED
  */
 export const deleteAgenda = async (req, res) => {
     const { agendaId, wallet } = req.params;
@@ -950,7 +1142,7 @@ export const deleteAgenda = async (req, res) => {
         if (!agendaId || !wallet || !isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Invalid parameters" });
         }
-        // Get agenda
+        // Get agenda with timeout
         const existingAgenda = await executeQuery(() => db.agenda.findFirst({
             where: {
                 id: agendaId,
@@ -968,14 +1160,14 @@ export const deleteAgenda = async (req, res) => {
                     }
                 }
             }
-        }), { maxRetries: 2, timeout: 5000 });
+        }), { maxRetries: 1, timeout: 3000 });
         if (!existingAgenda) {
             return res.status(404).json({
                 error: "Agenda not found",
                 details: `Agenda ${agendaId} not found`
             });
         }
-        // Verify permissions
+        // Verify permissions with timeout
         const requestingUser = await executeQuery(() => db.user.findFirst({
             where: {
                 walletAddress: wallet,
@@ -1008,7 +1200,7 @@ export const deleteAgenda = async (req, res) => {
         // Delete agenda (cascade will handle related content)
         await executeQuery(() => db.agenda.delete({
             where: { id: agendaId },
-        }), { maxRetries: 2, timeout: 5000 });
+        }), { maxRetries: 1, timeout: 3000 });
         success = true;
         res.status(200).json({
             message: "Agenda deleted successfully",
@@ -1018,6 +1210,12 @@ export const deleteAgenda = async (req, res) => {
     }
     catch (error) {
         console.error("Error deleting agenda:", error);
+        if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+            return res.status(504).json({
+                error: "Database query timeout",
+                message: "The operation took too long. Please try again."
+            });
+        }
         res.status(500).json({
             error: "Internal server error",
         });
@@ -1107,3 +1305,11 @@ function getInvalidFieldsForAgendaType(actionType, contentUpdates) {
     }
     return invalidFields;
 }
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, value] of authCache.entries()) {
+        if (now - value.timestamp > AUTH_CACHE_TTL) {
+            authCache.delete(key);
+        }
+    }
+}, 60000);

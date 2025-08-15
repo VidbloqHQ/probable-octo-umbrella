@@ -3,19 +3,38 @@ import { Router } from "express";
 import { db, getDatabaseMetrics, getQueryStats, getQueueStats } from "../prisma.js";
 const router = Router();
 /**
+ * Helper to convert BigInt to string for JSON serialization
+ */
+function serializeBigInt(obj) {
+    if (obj === null || obj === undefined)
+        return obj;
+    if (typeof obj === 'bigint')
+        return obj.toString();
+    if (Array.isArray(obj))
+        return obj.map(serializeBigInt);
+    if (typeof obj === 'object') {
+        const result = {};
+        for (const key in obj) {
+            result[key] = serializeBigInt(obj[key]);
+        }
+        return result;
+    }
+    return obj;
+}
+/**
  * Database health monitoring endpoint
  * Shows connection pool status and identifies issues
  */
 router.get('/db-health', async (req, res) => {
     try {
-        // Get connection pool status
-        const poolStatus = await db.$queryRaw `
+        // Get connection pool status with BigInt handling
+        const rawPoolStatus = await db.$queryRaw `
       SELECT 
         datname,
         pid,
         usename,
         application_name,
-        client_addr,
+        client_addr::text as client_addr,
         state,
         state_change,
         query_start,
@@ -38,6 +57,8 @@ router.get('/db-health', async (req, res) => {
         END,
         state_change DESC
     `;
+        // Serialize BigInt values
+        const poolStatus = serializeBigInt(rawPoolStatus);
         // Group by state
         const stateGroups = poolStatus.reduce((acc, conn) => {
             const state = conn.state || 'other';
@@ -93,7 +114,7 @@ WHERE datname = current_database()
   AND state_change < NOW() - INTERVAL '5 minutes';`
             });
         }
-        res.json({
+        const response = {
             status: issues.length === 0 ? 'healthy' : 'unhealthy',
             timestamp: new Date().toISOString(),
             connections: {
@@ -105,20 +126,26 @@ WHERE datname = current_database()
                 }))
             },
             metrics: {
-                database: dbMetrics,
+                database: serializeBigInt(dbMetrics),
                 queries: queryStats,
                 queue: queueStats
             },
             issues,
             fixes: fixes.length > 0 ? fixes : undefined
-        });
+        };
+        // Send response only once
+        res.json(response);
     }
     catch (error) {
         console.error('Database health check failed:', error);
-        res.status(503).json({
-            status: 'error',
-            error: error instanceof Error ? error.message : 'Unknown error'
-        });
+        // Only send error if response hasn't been sent
+        if (!res.headersSent) {
+            res.status(503).json({
+                status: 'error',
+                error: error instanceof Error ? error.message : 'Unknown error',
+                details: process.env.NODE_ENV === 'development' ? error : undefined
+            });
+        }
     }
 });
 /**
@@ -127,24 +154,60 @@ WHERE datname = current_database()
 router.post('/db-health/kill-idle', async (req, res) => {
     try {
         const { minIdleMinutes = 5 } = req.body;
+        // Use parameterized query to avoid SQL injection
         const result = await db.$queryRaw `
       SELECT pg_terminate_backend(pid) as terminated, pid
       FROM pg_stat_activity 
       WHERE datname = current_database()
         AND state = 'idle in transaction'
-        AND state_change < NOW() - INTERVAL '${minIdleMinutes} minutes'
+        AND state_change < NOW() - INTERVAL ${minIdleMinutes + ' minutes'}
     `;
+        const serializedResult = serializeBigInt(result);
         res.json({
             message: 'Idle transactions terminated',
-            terminated: result.length,
-            pids: result.map(r => r.pid)
+            terminated: serializedResult.length,
+            pids: serializedResult.map((r) => r.pid)
         });
     }
     catch (error) {
         console.error('Failed to kill idle transactions:', error);
-        res.status(500).json({
-            error: 'Failed to kill idle transactions'
+        if (!res.headersSent) {
+            res.status(500).json({
+                error: 'Failed to kill idle transactions',
+                details: error instanceof Error ? error.message : 'Unknown error'
+            });
+        }
+    }
+});
+/**
+ * Simple health check endpoint
+ */
+router.get('/db-simple', async (req, res) => {
+    try {
+        const result = await db.$queryRaw `
+      SELECT 
+        state,
+        COUNT(*) as count
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+      GROUP BY state
+      ORDER BY count DESC
+    `;
+        const serialized = serializeBigInt(result);
+        res.json({
+            status: 'ok',
+            connections: serialized,
+            timestamp: new Date().toISOString()
         });
+    }
+    catch (error) {
+        console.error('Simple health check failed:', error);
+        if (!res.headersSent) {
+            res.status(503).json({
+                status: 'error',
+                error: error instanceof Error ? error.message : 'Unknown error'
+            });
+        }
     }
 });
 export default router;

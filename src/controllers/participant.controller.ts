@@ -1,3 +1,4 @@
+// participant.controller.ts - FULLY FIXED VERSION
 import { Response } from "express";
 import { AccessToken } from "livekit-server-sdk";
 import WebSocket from "ws";
@@ -16,7 +17,7 @@ const participantCache = new Map<string, { data: any; timestamp: number }>();
 const PARTICIPANT_CACHE_TTL = 30000; // 30 seconds
 
 /**
- * Controller for getting all stream participants - OPTIMIZED
+ * Controller for getting all stream participants - FIXED
  */
 export const getStreamParticipants = async (
   req: TenantRequest,
@@ -44,7 +45,7 @@ export const getStreamParticipants = async (
       return res.status(200).json({ participants: cached.data });
     }
 
-    // Query with optimization
+    // Query with reduced timeout and limit
     const stream = await executeQuery(
       () => db.stream.findFirst({
         where: {
@@ -66,11 +67,12 @@ export const getStreamParticipants = async (
             },
             orderBy: {
               joinedAt: 'desc'
-            }
+            },
+            take: 100 // Limit to prevent timeout
           }
         }
       }),
-      { maxRetries: 2, timeout: 10000 }
+      { maxRetries: 1, timeout: 5000 } // Reduced timeout
     );
 
     if (!stream) {
@@ -87,8 +89,16 @@ export const getStreamParticipants = async (
 
     success = true;
     res.status(200).json({ participants: stream.participants });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error fetching stream participants:", error);
+    
+    if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+      return res.status(504).json({ 
+        error: "Database query timeout",
+        message: "The request took too long. Please try again."
+      });
+    }
+    
     res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
@@ -96,219 +106,7 @@ export const getStreamParticipants = async (
 };
 
 /**
- * Controller for updating participant permissions - OPTIMIZED
- */
-// export const updateParticipantPermissions = async (
-//   req: TenantRequest,
-//   res: Response
-// ) => {
-//   const { participantId, streamId, wallet, participantWallet, action } = req.body;
-//   const tenant = req.tenant;
-//   let success = false;
-
-//   try {
-//     if (!tenant) {
-//       return res.status(401).json({ error: "Tenant authentication required." });
-//     }
-
-//     if (!participantId || !streamId || !wallet || !participantWallet || !action) {
-//       return res.status(400).json({
-//         error: "Missing required fields: participantId, streamId, wallet, participantWallet, or action",
-//       });
-//     }
-
-//     if (action !== "promote" && action !== "demote") {
-//       return res.status(400).json({
-//         error: "Action must be either 'promote' or 'demote'",
-//       });
-//     }
-
-//     if (!isValidWalletAddress(wallet) || !isValidWalletAddress(participantWallet)) {
-//       return res.status(400).json({ error: "Invalid wallet address format." });
-//     }
-
-//     // Parallel fetch of stream and user
-//     const [stream, requestingUser] = await Promise.all([
-//       executeQuery(
-//         () => db.stream.findFirst({
-//           where: {
-//             name: streamId,
-//             tenantId: tenant.id,
-//           },
-//           select: {
-//             id: true,
-//             userId: true,
-//           }
-//         }),
-//         { maxRetries: 2, timeout: 10000 }
-//       ),
-//       executeQuery(
-//         () => db.user.findFirst({
-//           where: {
-//             walletAddress: wallet,
-//             tenantId: tenant.id,
-//           },
-//           select: {
-//             id: true
-//           }
-//         }),
-//         { maxRetries: 2, timeout: 10000 }
-//       )
-//     ]);
-
-//     if (!stream) {
-//       return res.status(404).json({ error: `Stream with name ${streamId} not found` });
-//     }
-
-//     if (!requestingUser) {
-//       return res.status(403).json({ error: "User not authorized." });
-//     }
-
-//     const isHost = requestingUser.id === stream.userId;
-//     if (!isHost) {
-//       return res.status(403).json({ error: "Only hosts can update participant permissions" });
-//     }
-
-//     // Use transaction for updating participant
-//     const result = await executeTransaction(async (tx) => {
-//       const participant = await tx.participant.findFirst({
-//         where: {
-//           streamId: stream.id,
-//           walletAddress: participantWallet,
-//           tenantId: tenant.id,
-//         },
-//       });
-
-//       if (!participant) {
-//         throw new Error("Participant not found in this stream");
-//       }
-
-//       const expectedCurrentRole = action === "promote" ? "guest" : "temp-host";
-//       const newRole = action === "promote" ? "temp-host" : "guest";
-
-//       if (participant.userType !== expectedCurrentRole) {
-//         throw new Error(`Participant is not a ${expectedCurrentRole}`);
-//       }
-
-//       const updated = await tx.participant.update({
-//         where: { id: participant.id },
-//         data: { userType: newRole },
-//       });
-
-//       return { participant: updated, newRole };
-//     });
-
-//     // Update LiveKit permissions (outside transaction)
-//     try {
-//       const livekitParticipant = await roomService.getParticipant(
-//         streamId,
-//         participantId
-//       );
-
-//       if (!livekitParticipant) {
-//         console.error("LiveKit Participant not found:", participantId);
-//         return res.status(404).json({ error: "LiveKit participant not found" });
-//       }
-
-//       await roomService.updateParticipant(streamId, participantId, undefined, {
-//         canPublish: action === "promote",
-//         canSubscribe: true,
-//       });
-
-//       // Generate new token
-//       const newAccessToken = new AccessToken(
-//         process.env.LIVEKIT_API_KEY!,
-//         process.env.LIVEKIT_API_SECRET!,
-//         {
-//           identity: participantId,
-//           ttl: "60m",
-//           metadata: JSON.stringify({
-//             userName: result.participant.userName,
-//             participantId: result.participant.id,
-//             userType: result.newRole,
-//             walletAddress: result.participant.walletAddress,
-//             ...(result.participant.avatarUrl && { avatarUrl: result.participant.avatarUrl }),
-//           }),
-//         }
-//       );
-
-//       newAccessToken.addGrant({
-//         roomJoin: true,
-//         room: streamId,
-//         canPublish: action === "promote",
-//         canSubscribe: true,
-//         canPublishData: true,
-//         roomRecord: false,
-//       });
-
-//       const token = await newAccessToken.toJwt();
-
-//       // Send WebSocket notifications
-//       if (wss && wss.clients) {
-//         const event = action === "promote" ? "inviteGuest" : "returnToGuest";
-
-//         if (clientsByRoom[streamId]) {
-//           const roomEventMessage = JSON.stringify({
-//             event: event,
-//             data: {
-//               participantId,
-//               roomName: streamId,
-//             },
-//           });
-
-//           clientsByRoom[streamId].forEach((client) => {
-//             if (client.readyState === WebSocket.OPEN) {
-//               client.send(roomEventMessage);
-//             }
-//           });
-//         }
-
-//         if (clientsByIdentity[participantId]) {
-//           const tokenMessage = JSON.stringify({
-//             event: "newToken",
-//             data: { token, newUserType: result.newRole },
-//           });
-
-//           if (clientsByIdentity[participantId].readyState === WebSocket.OPEN) {
-//             clientsByIdentity[participantId].send(tokenMessage);
-//           }
-//         }
-//       }
-
-//       // Invalidate cache
-//       participantCache.delete(`${tenant.id}:${streamId}:participants`);
-
-//       const message = action === "promote"
-//         ? `Invited participant ${participantId} to speak`
-//         : `Revoked speaking permissions for participant ${participantId}`;
-
-//       success = true;
-//       res.status(200).json({
-//         message,
-//         token,
-//         participantId,
-//         newRole: result.newRole,
-//       });
-//     } catch (error) {
-//       console.error("Error updating LiveKit permissions:", error);
-//       res.status(500).json({ error: "Failed to update participant permissions in LiveKit" });
-//     }
-//   } catch (error: any) {
-//     console.error(`Error ${action === "promote" ? "promoting" : "demoting"} participant:`, error);
-    
-//     if (error.message?.includes("not found") || error.message?.includes("not a")) {
-//       return res.status(400).json({ error: error.message });
-//     }
-    
-//     res.status(500).json({ error: "Internal server error" });
-//   } finally {
-//     trackQuery(success);
-//   }
-// };
-
-
-/**
- * Controller for updating participant permissions - REFACTORED WITHOUT TRANSACTIONS
+ * Controller for updating participant permissions - FIXED
  */
 export const updateParticipantPermissions = async (
   req: TenantRequest,
@@ -339,7 +137,7 @@ export const updateParticipantPermissions = async (
       return res.status(400).json({ error: "Invalid wallet address format." });
     }
 
-    // Step 1: Parallel fetch of stream and user
+    // Parallel fetch with reduced timeout
     const [stream, requestingUser] = await Promise.all([
       executeQuery(
         () => db.stream.findFirst({
@@ -352,7 +150,7 @@ export const updateParticipantPermissions = async (
             userId: true,
           }
         }),
-        { maxRetries: 2, timeout: 5000 }
+        { maxRetries: 1, timeout: 3000 }
       ),
       executeQuery(
         () => db.user.findFirst({
@@ -364,7 +162,7 @@ export const updateParticipantPermissions = async (
             id: true
           }
         }),
-        { maxRetries: 2, timeout: 5000 }
+        { maxRetries: 1, timeout: 3000 }
       )
     ]);
 
@@ -381,7 +179,7 @@ export const updateParticipantPermissions = async (
       return res.status(403).json({ error: "Only hosts can update participant permissions" });
     }
 
-    // Step 2: Get participant
+    // Get participant
     const participant = await executeQuery(
       () => db.participant.findFirst({
         where: {
@@ -390,7 +188,7 @@ export const updateParticipantPermissions = async (
           tenantId: tenant.id,
         },
       }),
-      { maxRetries: 2, timeout: 5000 }
+      { maxRetries: 1, timeout: 3000 }
     );
 
     if (!participant) {
@@ -404,7 +202,7 @@ export const updateParticipantPermissions = async (
       return res.status(400).json({ error: `Participant is not a ${expectedCurrentRole}` });
     }
 
-    // Step 3: Update participant (single atomic operation)
+    // Update participant (single atomic operation)
     const updatedParticipant = await executeQuery(
       () => db.participant.update({
         where: { id: participant.id },
@@ -413,20 +211,17 @@ export const updateParticipantPermissions = async (
           version: { increment: 1 }
         },
       }),
-      { maxRetries: 2, timeout: 5000 }
+      { maxRetries: 1, timeout: 3000 }
     );
 
-    // Step 4: Update LiveKit permissions (can fail without breaking DB state)
+    // Update LiveKit permissions (can fail without breaking DB state)
     try {
       const livekitParticipant = await roomService.getParticipant(
         streamId,
         participantId
       );
 
-      if (!livekitParticipant) {
-        console.error("LiveKit Participant not found:", participantId);
-        // Continue - participant is updated in DB even if LiveKit fails
-      } else {
+      if (livekitParticipant) {
         await roomService.updateParticipant(streamId, participantId, undefined, {
           canPublish: action === "promote",
           canSubscribe: true,
@@ -521,6 +316,13 @@ export const updateParticipantPermissions = async (
   } catch (error: any) {
     console.error(`Error ${action === "promote" ? "promoting" : "demoting"} participant:`, error);
     
+    if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+      return res.status(504).json({ 
+        error: "Database query timeout",
+        message: "The operation took too long. Please try again."
+      });
+    }
+    
     if (error.message?.includes("not found") || error.message?.includes("not a")) {
       return res.status(400).json({ error: error.message });
     }
@@ -532,7 +334,7 @@ export const updateParticipantPermissions = async (
 };
 
 /**
- * Controller for getting participant quiz scores - OPTIMIZED
+ * Controller for getting participant quiz scores - FIXED
  */
 export const getParticipantScores = async (
   req: TenantRequest,
@@ -551,7 +353,7 @@ export const getParticipantScores = async (
       return res.status(400).json({ error: "Missing required field: streamId" });
     }
 
-    // Get stream first
+    // Get stream first with reduced timeout
     const stream = await executeQuery(
       () => db.stream.findFirst({
         where: {
@@ -563,14 +365,14 @@ export const getParticipantScores = async (
           name: true,
         }
       }),
-      { maxRetries: 2, timeout: 10000 }
+      { maxRetries: 1, timeout: 3000 }
     );
 
     if (!stream) {
       return res.status(404).json({ error: `Stream with name ${streamId} not found` });
     }
 
-    // Get participants with quiz responses
+    // Get participants with quiz responses - limited results
     const participants = await executeQuery(
       () => db.participant.findMany({
         where: {
@@ -588,8 +390,9 @@ export const getParticipantScores = async (
         orderBy: {
           totalPoints: "desc",
         },
+        take: 50 // Limit to top 50 participants
       }),
-      { maxRetries: 2, timeout: 10000 }
+      { maxRetries: 1, timeout: 5000 }
     );
 
     // Format the response
@@ -618,8 +421,16 @@ export const getParticipantScores = async (
       },
       leaderboard,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error fetching participant scores:", error);
+    
+    if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+      return res.status(504).json({ 
+        error: "Database query timeout",
+        message: "The request took too long. Please try again."
+      });
+    }
+    
     res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
@@ -627,120 +438,7 @@ export const getParticipantScores = async (
 };
 
 /**
- * Controller for updating participant left time - OPTIMIZED
- */
-// export const updateParticipantLeftTime = async (
-//   req: TenantRequest,
-//   res: Response
-// ) => {
-//   const { streamId } = req.params;
-//   let wallet, leftAt;
-  
-//   // Handle both JSON body and FormData from sendBeacon
-//   if (req.method === 'POST' && req.query.method === 'PUT') {
-//     wallet = req.body.wallet;
-//     leftAt = req.body.leftAt;
-//   } else {
-//     ({ wallet, leftAt } = req.body);
-//   }
-  
-//   const tenant = req.tenant;
-//   let success = false;
-
-//   try {
-//     console.log(`updateParticipantLeftTime called:`, { 
-//       streamId, 
-//       wallet, 
-//       leftAt, 
-//       tenantId: tenant?.id 
-//     });
-
-//     if (!tenant) {
-//       return res.status(401).json({ error: "Tenant authentication required." });
-//     }
-
-//     if (!streamId || !wallet) {
-//       return res.status(400).json({ error: "Missing required fields: streamId, wallet" });
-//     }
-
-//     if (!isValidWalletAddress(wallet)) {
-//       console.log(`Invalid wallet address: ${wallet}`);
-//       return res.status(400).json({ error: "Invalid wallet address format." });
-//     }
-
-//     // Get stream
-//     const stream = await executeQuery(
-//       () => db.stream.findFirst({
-//         where: {
-//           name: streamId,
-//           tenantId: tenant.id,
-//         },
-//         select: {
-//           id: true
-//         }
-//       }),
-//       { maxRetries: 1, timeout: 5000 }
-//     );
-
-//     if (!stream) {
-//       console.log(`Stream not found: ${streamId}`);
-//       return res.status(404).json({ error: `Stream not found` });
-//     }
-
-//     // Update all matching participants in a transaction
-//     const updateCount = await executeTransaction(async (tx) => {
-//       const participants = await tx.participant.findMany({
-//         where: {
-//           streamId: stream.id,
-//           walletAddress: wallet,
-//           tenantId: tenant.id,
-//           leftAt: null // Only update those not already marked as left
-//         },
-//       });
-
-//       if (participants.length === 0) {
-//         return 0;
-//       }
-
-//       // Batch update
-//       await tx.participant.updateMany({
-//         where: {
-//           id: { in: participants.map((p: { id: any; }) => p.id) },
-//           leftAt: null
-//         },
-//         data: { 
-//           leftAt: new Date(leftAt || Date.now()) 
-//         },
-//       });
-
-//       return participants.length;
-//     });
-
-//     if (updateCount === 0) {
-//       console.log(`No active participants found for wallet ${wallet}`);
-//       return res.status(404).json({ error: "No active participant found" });
-//     }
-
-//     // Invalidate cache
-//     participantCache.delete(`${tenant.id}:${streamId}:participants`);
-
-//     console.log(`Updated ${updateCount} participants for wallet ${wallet}`);
-    
-//     success = true;
-//     return res.status(200).json({ 
-//       message: `${updateCount} participants updated successfully`
-//     });
-//   } catch (error) {
-//     console.error("Error updating participant left time:", error);
-//     res.status(500).json({ error: "Internal server error" });
-//   } finally {
-//     trackQuery(success);
-//   }
-// };
-
-
-/**
- * Controller for updating participant left time - REFACTORED WITHOUT TRANSACTIONS
+ * Controller for updating participant left time - FIXED
  */
 export const updateParticipantLeftTime = async (
   req: TenantRequest,
@@ -781,7 +479,7 @@ export const updateParticipantLeftTime = async (
       return res.status(400).json({ error: "Invalid wallet address format." });
     }
 
-    // Step 1: Get stream
+    // Get stream with reduced timeout
     const stream = await executeQuery(
       () => db.stream.findFirst({
         where: {
@@ -792,7 +490,7 @@ export const updateParticipantLeftTime = async (
           id: true
         }
       }),
-      { maxRetries: 1, timeout: 3000 }
+      { maxRetries: 1, timeout: 2000 }
     );
 
     if (!stream) {
@@ -800,7 +498,7 @@ export const updateParticipantLeftTime = async (
       return res.status(404).json({ error: `Stream not found` });
     }
 
-    // Step 2: Update all matching participants (single operation)
+    // Update all matching participants (single operation)
     const updateResult = await executeQuery(
       () => db.participant.updateMany({
         where: {
@@ -814,7 +512,7 @@ export const updateParticipantLeftTime = async (
           version: { increment: 1 }
         },
       }),
-      { maxRetries: 2, timeout: 5000 }
+      { maxRetries: 1, timeout: 3000 }
     );
 
     if (updateResult.count === 0) {
@@ -831,8 +529,16 @@ export const updateParticipantLeftTime = async (
     return res.status(200).json({ 
       message: `${updateResult.count} participants updated successfully`
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error updating participant left time:", error);
+    
+    if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+      return res.status(504).json({ 
+        error: "Database query timeout",
+        message: "The operation took too long. Please try again."
+      });
+    }
+    
     res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
@@ -840,7 +546,7 @@ export const updateParticipantLeftTime = async (
 };
 
 /**
- * Controller for handling WebSocket disconnect - OPTIMIZED
+ * Controller for handling WebSocket disconnect - FIXED
  */
 export const handleWebSocketDisconnect = async (
   req: TenantRequest,
@@ -859,9 +565,14 @@ export const handleWebSocketDisconnect = async (
       return res.status(400).json({ error: "Missing required fields: streamId, participantId" });
     }
 
-    // Use the centralized service
-    const dbSuccess = await ParticipantManager.markParticipantAsLeft(streamId, null, participantId);
-    const wsSuccess = ParticipantManager.cleanupWebSocketState(streamId, participantId);
+    // Use the centralized service with timeout handling
+    const [dbSuccess, wsSuccess] = await Promise.all([
+      Promise.race([
+        ParticipantManager.markParticipantAsLeft(streamId, null, participantId),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000))
+      ]),
+      Promise.resolve(ParticipantManager.cleanupWebSocketState(streamId, participantId))
+    ]);
 
     if (!dbSuccess && !wsSuccess) {
       return res.status(404).json({ error: "Participant not found" });
@@ -872,8 +583,16 @@ export const handleWebSocketDisconnect = async (
 
     success = true;
     res.status(200).json({ message: "Participant disconnect handled successfully" });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error handling WebSocket disconnect:", error);
+    
+    if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+      return res.status(504).json({ 
+        error: "Database query timeout",
+        message: "The operation took too long. Please try again."
+      });
+    }
+    
     res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
