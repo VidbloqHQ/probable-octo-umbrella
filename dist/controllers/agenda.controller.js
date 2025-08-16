@@ -273,16 +273,113 @@ export const createAgenda = async (req, res) => {
 /**
  * Controller for getting all stream's agendas - FIXED
  */
+// export const getStreamAgenda = async (
+//   req: TenantRequest,
+//   res: Response
+// ) => {
+//   const { streamId } = req.params;
+//   const tenant = req.tenant;
+//   let success = false;
+//   try {
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });
+//     }
+//     if (!streamId) {
+//       return res.status(400).json({ error: "Missing livestream ID" });
+//     }
+//     // Get stream and its agendas with timeout and limits
+//     const stream = await executeQuery(
+//       () => db.stream.findFirst({
+//         where: {
+//           name: streamId,
+//           tenantId: tenant.id,
+//         },
+//         include: {
+//           agenda: {
+//             include: {
+//               pollContent: true,
+//               quizContent: {
+//                 include: { 
+//                   questions: {
+//                     take: 10 // Limit questions per quiz
+//                   } 
+//                 }
+//               },
+//               qaContent: true,
+//               customContent: true,
+//               participantResponses: {
+//                 select: {
+//                   id: true,
+//                   responseType: true,
+//                   timestamp: true,
+//                   participantId: true
+//                 },
+//                 take: 50 // Limit responses
+//               }
+//             },
+//             orderBy: {
+//               timeStamp: 'asc'
+//             },
+//             take: 50 // Limit agendas
+//           }
+//         }
+//       }),
+//       { maxRetries: 1, timeout: 5000 }
+//     );
+//     if (!stream) {
+//       return res
+//         .status(404)
+//         .json({ error: "Stream not found in your tenant" });
+//     }
+//     success = true;
+//     res.status(200).json(stream.agenda);
+//   } catch (error: any) {
+//     console.error("Error fetching agendas:", error);
+//     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+//       return res.status(504).json({ 
+//         error: "Database query timeout",
+//         message: "The request took too long. Please try again."
+//       });
+//     }
+//     res.status(500).json({ error: "Internal server error" });
+//   } finally {
+//     trackQuery(success);
+//   }
+// };
+/**
+ * Controller for getting all stream's agendas - FIXED WITH RESPONSE GUARDS
+ */
 export const getStreamAgenda = async (req, res) => {
     const { streamId } = req.params;
     const tenant = req.tenant;
     let success = false;
     try {
+        // CRITICAL: Check if response already sent at the very beginning
+        if (res.headersSent) {
+            console.log(`[getStreamAgenda] Response already sent for ${streamId}`);
+            return;
+        }
+        // Check if request was aborted
+        const abortController = req.abortController;
+        if (abortController?.signal?.aborted) {
+            console.log(`[getStreamAgenda] Request already aborted for ${streamId}`);
+            return;
+        }
         if (!tenant) {
-            return res.status(401).json({ error: "Tenant authentication required." });
+            if (!res.headersSent) {
+                res.status(401).json({ error: "Tenant authentication required." });
+            }
+            return; // CRITICAL: Return immediately after sending response
         }
         if (!streamId) {
-            return res.status(400).json({ error: "Missing livestream ID" });
+            if (!res.headersSent) {
+                res.status(400).json({ error: "Missing livestream ID" });
+            }
+            return; // CRITICAL: Return immediately after sending response
+        }
+        // Check again before query
+        if (res.headersSent || abortController?.signal?.aborted) {
+            return;
         }
         // Get stream and its agendas with timeout and limits
         const stream = await executeQuery(() => db.stream.findFirst({
@@ -320,23 +417,45 @@ export const getStreamAgenda = async (req, res) => {
                 }
             }
         }), { maxRetries: 1, timeout: 5000 });
+        // Check again after query
+        if (res.headersSent || abortController?.signal?.aborted) {
+            console.log(`[getStreamAgenda] Response sent/aborted after query for ${streamId}`);
+            return;
+        }
         if (!stream) {
-            return res
-                .status(404)
-                .json({ error: "Stream not found in your tenant" });
+            if (!res.headersSent) {
+                res.status(404).json({ error: "Stream not found in your tenant" });
+            }
+            return; // CRITICAL: Return immediately after sending response
         }
         success = true;
-        res.status(200).json(stream.agenda);
+        // Final check before sending response
+        if (!res.headersSent && !abortController?.signal?.aborted) {
+            res.status(200).json(stream.agenda);
+        }
+        return; // CRITICAL: Return after sending response
     }
     catch (error) {
         console.error("Error fetching agendas:", error);
+        // Check before sending error response
+        if (res.headersSent) {
+            console.log(`[getStreamAgenda] Error after response sent`);
+            return;
+        }
+        const abortController = req.abortController;
+        if (abortController?.signal?.aborted) {
+            console.log(`[getStreamAgenda] Error after abort`);
+            return;
+        }
         if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-            return res.status(504).json({
+            res.status(504).json({
                 error: "Database query timeout",
                 message: "The request took too long. Please try again."
             });
+            return;
         }
         res.status(500).json({ error: "Internal server error" });
+        return;
     }
     finally {
         trackQuery(success);
