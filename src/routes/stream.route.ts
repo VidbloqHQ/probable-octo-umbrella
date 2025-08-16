@@ -9,16 +9,17 @@ import {
   updateStream,
   stopStreamRecord,
 } from "../controllers/stream.controller.js";
+import { safeController } from "../middlewares/request-lock.middleware.js";
 
 const router = express.Router();
 
-router.post("/", createStream);
-router.post("/token", createStreamToken);
-router.get("/:streamId", getStream);
-router.post("/record", recordStream);
-router.post("/record/stop", stopStreamRecord);
-router.put("/:streamId", updateStream);
-router.post("/youtube", streamToYoutube);
-router.post("/youtube/stop", stopYoutubeStream);
+router.post("/", safeController(createStream));
+router.post("/token", safeController(createStreamToken));
+router.get("/:streamId", safeController(getStream));
+router.post("/record", safeController(recordStream));
+router.post("/record/stop", safeController(stopStreamRecord));
+router.put("/:streamId", safeController(updateStream));
+router.post("/youtube", safeController(streamToYoutube));
+router.post("/youtube/stop", safeController(stopYoutubeStream));
 
 export default router;

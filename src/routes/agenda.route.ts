@@ -1,4 +1,5 @@
 import express from "express";
+import { safeController } from "../middlewares/request-lock.middleware.js";
 import {
   createAgenda,
   getStreamAgenda,
@@ -9,10 +10,16 @@ import {
 
 const router = express.Router();
 
-router.post("/:streamId", createAgenda);
-router.get("/stream/:streamId", getStreamAgenda);
-router.put("/:agendaId", updateStreamAgenda);
-router.get("/:agendaId", getAgenda);
-router.delete("/:agendaId/:wallet", deleteAgenda);
+// router.post("/:streamId", createAgenda);
+// router.get("/stream/:streamId", getStreamAgenda);
+// router.put("/:agendaId", updateStreamAgenda);
+// router.get("/:agendaId", getAgenda);
+// router.delete("/:agendaId/:wallet", deleteAgenda);
+
+router.post("/:streamId", safeController(createAgenda));
+router.get("/stream/:streamId", safeController(getStreamAgenda));
+router.put("/:agendaId", safeController(updateStreamAgenda));
+router.get("/:agendaId", safeController(getAgenda));
+router.delete("/:agendaId/:wallet", safeController(deleteAgenda));
 
 export default router;
