@@ -1,7 +1,3 @@
-// import { Response, NextFunction } from "express";
-// import * as bcrypt from "bcryptjs";
-// import { db, executeQuery, trackQuery } from "../prisma.js";
-// import { TenantRequest } from "../types/index.js";
 import * as bcrypt from "bcryptjs";
 import { db, executeQuery, trackQuery } from "../prisma.js";
 // Cache configuration
