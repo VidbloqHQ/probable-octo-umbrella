@@ -488,7 +488,7 @@ import express from "express";
 import { createServer } from "http";
 import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
-import { responseGuard } from "./middlewares/response-guard.middleware.js";
+// import { responseGuard } from "./middlewares/response-guard.middleware.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
 import { isDatabaseHealthy, getDatabaseMetrics, db, executeQuery } from "./prisma.js";
@@ -638,7 +638,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // RESPONSE GUARD MIDDLEWARE - CRITICAL!
 // This prevents ERR_HTTP_HEADERS_SENT errors
 // ============================================
-app.use(responseGuard);
+// app.use(responseGuard);
 // Request ID middleware for tracing
 app.use((req, res, next) => {
     req.id = req.headers['x-request-id'] ||
