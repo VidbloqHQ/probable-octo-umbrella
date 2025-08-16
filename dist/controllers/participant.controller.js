@@ -1,3 +1,16 @@
+// // participant.controller.ts - FULLY FIXED VERSION
+// import { Response } from "express";
+// import { AccessToken } from "livekit-server-sdk";
+// import WebSocket from "ws";
+// import { db, executeQuery, trackQuery } from "../prisma.js";
+// import {
+//   isValidWalletAddress,
+//   roomService,
+// } from "../utils/index.js";
+// import { TenantRequest } from "../types/index.js";
+// import { clientsByRoom, clientsByIdentity } from "../websocket.js";
+// import { ParticipantManager } from "../services/participantManager.js";
+// import { wss } from "../app.js";
 import { AccessToken } from "livekit-server-sdk";
 import WebSocket from "ws";
 import { db, executeQuery, trackQuery } from "../prisma.js";
@@ -9,46 +22,39 @@ import { wss } from "../app.js";
 const participantCache = new Map();
 const PARTICIPANT_CACHE_TTL = 30000; // 30 seconds
 /**
- * Controller for getting all stream participants - FIXED WITH ABORT CHECKING
+ * Controller for getting all stream participants - FIXED WITH SINGLE RESPONSE
  */
 export const getStreamParticipants = async (req, res) => {
     console.log('[DEBUG] getStreamParticipants called');
+    // Guard: Check if response already sent at the very beginning
+    if (res.headersSent) {
+        console.log(`[getStreamParticipants] Response already sent at start`);
+        return;
+    }
     const { streamId } = req.params;
     const tenant = req.tenant;
     let success = false;
     try {
-        // Check if already sent at the very beginning
-        if (res.headersSent) {
-            console.log(`[getStreamParticipants] Response already sent for ${streamId}`);
-            return;
-        }
-        // Check if request was aborted
         const abortController = req.abortController;
         if (abortController?.signal?.aborted) {
             console.log(`[getStreamParticipants] Request already aborted for ${streamId}`);
             return;
         }
         if (!tenant) {
-            if (!res.headersSent && !abortController?.signal?.aborted) {
-                return res.status(401).json({ error: "Tenant authentication required." });
-            }
-            return;
+            res.status(401).json({ error: "Tenant authentication required." });
+            return; // CRITICAL: Return immediately after sending response
         }
         if (!streamId) {
-            if (!res.headersSent && !abortController?.signal?.aborted) {
-                return res.status(400).json({ error: "Missing required field: streamId" });
-            }
-            return;
+            res.status(400).json({ error: "Missing required field: streamId" });
+            return; // CRITICAL: Return immediately after sending response
         }
         // Check cache first
         const cacheKey = `${tenant.id}:${streamId}:participants`;
         const cached = participantCache.get(cacheKey);
         if (cached && Date.now() - cached.timestamp < PARTICIPANT_CACHE_TTL) {
             success = true;
-            if (!res.headersSent && !abortController?.signal?.aborted) {
-                return res.status(200).json({ participants: cached.data });
-            }
-            return;
+            res.status(200).json({ participants: cached.data });
+            return; // CRITICAL: Return immediately after sending response
         }
         // Before making the query, check again
         if (res.headersSent || abortController?.signal?.aborted) {
@@ -88,12 +94,10 @@ export const getStreamParticipants = async (req, res) => {
             return;
         }
         if (!stream) {
-            if (!res.headersSent && !abortController?.signal?.aborted) {
-                return res.status(404).json({
-                    error: `Stream with name ${streamId} not found`,
-                });
-            }
-            return;
+            res.status(404).json({
+                error: `Stream with name ${streamId} not found`,
+            });
+            return; // CRITICAL: Return immediately after sending response
         }
         // Cache the results
         participantCache.set(cacheKey, {
@@ -101,10 +105,13 @@ export const getStreamParticipants = async (req, res) => {
             timestamp: Date.now()
         });
         success = true;
-        // Final check before sending
-        if (!res.headersSent && !abortController?.signal?.aborted) {
-            res.status(200).json({ participants: stream.participants });
+        // Final check before sending (belt and suspenders)
+        if (res.headersSent) {
+            console.log(`[getStreamParticipants] Response already sent before final send`);
+            return;
         }
+        res.status(200).json({ participants: stream.participants });
+        return; // CRITICAL: Return immediately after sending response
     }
     catch (error) {
         console.error("Error fetching stream participants:", error);
@@ -119,12 +126,14 @@ export const getStreamParticipants = async (req, res) => {
             return;
         }
         if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-            return res.status(504).json({
+            res.status(504).json({
                 error: "Database query timeout",
                 message: "The request took too long. Please try again."
             });
+            return;
         }
         res.status(500).json({ error: "Internal server error" });
+        return;
     }
     finally {
         trackQuery(success);
