@@ -8,11 +8,15 @@ function getUserCacheKey(wallet, tenantId) {
     return `${tenantId}:${wallet}`;
 }
 /**
- * Create or update a user under the current tenant - OPTIMIZED
+ * Create or update a user under the current tenant - OPTIMIZED WITH ABORT CHECKING
  */
 export const createUser = async (req, res) => {
     let success = false;
     try {
+        const abortController = req.abortController;
+        if (res.headersSent || abortController?.signal?.aborted) {
+            return;
+        }
         const { wallet, name, email, image } = req.body;
         const tenant = req.tenant;
         if (!tenant) {
@@ -38,7 +42,11 @@ export const createUser = async (req, res) => {
                     walletAddress: wallet,
                     tenantId: tenant.id
                 },
-            }), { maxRetries: 2, timeout: 10000 });
+            }), { maxRetries: 1, timeout: 2000 });
+        }
+        // Check abort after query
+        if (res.headersSent || abortController?.signal?.aborted) {
+            return;
         }
         // If user exists for this tenant, update it
         if (existingUser) {
@@ -49,11 +57,14 @@ export const createUser = async (req, res) => {
                     email: email || existingUser.email,
                     image: image || existingUser.image
                 },
-            }), { maxRetries: 2, timeout: 10000 });
+            }), { maxRetries: 1, timeout: 3000 });
             // Update cache
             userCache.set(cacheKey, { data: updatedUser, timestamp: Date.now() });
             success = true;
-            return res.status(200).json({ data: updatedUser, updated: true });
+            if (!res.headersSent && !abortController?.signal?.aborted) {
+                return res.status(200).json({ data: updatedUser, updated: true });
+            }
+            return;
         }
         // Create new user under this tenant
         const user = await executeQuery(() => db.user.create({
@@ -65,14 +76,18 @@ export const createUser = async (req, res) => {
                 tenantId: tenant.id,
                 points: 0
             },
-        }), { maxRetries: 2, timeout: 10000 });
+        }), { maxRetries: 1, timeout: 3000 });
         // Cache the new user
         userCache.set(cacheKey, { data: user, timestamp: Date.now() });
         success = true;
-        res.status(201).json({ data: user, created: true });
+        if (!res.headersSent && !abortController?.signal?.aborted) {
+            res.status(201).json({ data: user, created: true });
+        }
     }
     catch (error) {
         console.error("Error creating user:", error);
+        if (res.headersSent)
+            return;
         res.status(500).json({ error: "An unexpected error occurred." });
     }
     finally {
@@ -80,13 +95,17 @@ export const createUser = async (req, res) => {
     }
 };
 /**
- * Get a user by wallet address under the current tenant - OPTIMIZED
+ * Get a user by wallet address under the current tenant - OPTIMIZED WITH ABORT CHECKING
  */
 export const getUser = async (req, res) => {
     const { userWallet } = req.params;
     const tenant = req.tenant;
     let success = false;
     try {
+        const abortController = req.abortController;
+        if (res.headersSent || abortController?.signal?.aborted) {
+            return;
+        }
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
@@ -100,7 +119,10 @@ export const getUser = async (req, res) => {
         const cached = userCache.get(cacheKey);
         if (cached && Date.now() - cached.timestamp < USER_CACHE_TTL) {
             success = true;
-            return res.status(200).json(cached.data);
+            if (!res.headersSent && !abortController?.signal?.aborted) {
+                return res.status(200).json(cached.data);
+            }
+            return;
         }
         // Cache miss - query database
         const user = await executeQuery(() => db.user.findFirst({
@@ -108,17 +130,25 @@ export const getUser = async (req, res) => {
                 walletAddress: userWallet,
                 tenantId: tenant.id
             },
-        }), { maxRetries: 2, timeout: 10000 });
+        }), { maxRetries: 1, timeout: 2000 });
+        // Check abort after query
+        if (res.headersSent || abortController?.signal?.aborted) {
+            return;
+        }
         if (!user) {
             return res.status(404).json({ message: "User not found" });
         }
         // Cache the result
         userCache.set(cacheKey, { data: user, timestamp: Date.now() });
         success = true;
-        return res.status(200).json(user);
+        if (!res.headersSent && !abortController?.signal?.aborted) {
+            return res.status(200).json(user);
+        }
     }
     catch (error) {
         console.error("Error getting user:", error);
+        if (res.headersSent)
+            return;
         res.status(500).json({ error: "An unexpected error occurred." });
     }
     finally {
@@ -126,7 +156,7 @@ export const getUser = async (req, res) => {
     }
 };
 /**
- * Update a user under the current tenant - OPTIMIZED
+ * Update a user under the current tenant - OPTIMIZED WITH ABORT CHECKING
  */
 export const updateUser = async (req, res) => {
     const { userId } = req.params;
@@ -134,6 +164,10 @@ export const updateUser = async (req, res) => {
     const tenant = req.tenant;
     let success = false;
     try {
+        const abortController = req.abortController;
+        if (res.headersSent || abortController?.signal?.aborted) {
+            return;
+        }
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
@@ -148,24 +182,32 @@ export const updateUser = async (req, res) => {
                 id: userId,
                 tenantId: tenant.id
             },
-        }), { maxRetries: 2, timeout: 10000 });
+        }), { maxRetries: 1, timeout: 2000 });
         if (!existingUser) {
             return res.status(404).json({ error: "User not found or not accessible" });
+        }
+        // Check abort before update
+        if (res.headersSent || abortController?.signal?.aborted) {
+            return;
         }
         // Remove walletAddress from updates for security
         const { walletAddress, ...safeUpdates } = updates;
         const user = await executeQuery(() => db.user.update({
             where: { id: userId },
             data: safeUpdates,
-        }), { maxRetries: 2, timeout: 10000 });
+        }), { maxRetries: 1, timeout: 3000 });
         // Invalidate cache for this user
         const cacheKey = getUserCacheKey(user.walletAddress, tenant.id);
         userCache.delete(cacheKey);
         success = true;
-        res.status(200).json({ data: user });
+        if (!res.headersSent && !abortController?.signal?.aborted) {
+            res.status(200).json({ data: user });
+        }
     }
     catch (error) {
         console.error("Error updating user:", error);
+        if (res.headersSent)
+            return;
         res.status(500).json({ error: "An unexpected error occurred." });
     }
     finally {
@@ -173,12 +215,16 @@ export const updateUser = async (req, res) => {
     }
 };
 /**
- * List users for the current tenant - OPTIMIZED
+ * List users for the current tenant - OPTIMIZED WITH ABORT CHECKING
  */
 export const listUsers = async (req, res) => {
     const tenant = req.tenant;
     let success = false;
     try {
+        const abortController = req.abortController;
+        if (res.headersSent || abortController?.signal?.aborted) {
+            return;
+        }
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
@@ -190,7 +236,7 @@ export const listUsers = async (req, res) => {
         const [totalUsers, users] = await Promise.all([
             executeQuery(() => db.user.count({
                 where: { tenantId: tenant.id }
-            }), { maxRetries: 1, timeout: 5000 }),
+            }), { maxRetries: 1, timeout: 2000 }),
             executeQuery(() => db.user.findMany({
                 where: { tenantId: tenant.id },
                 skip,
@@ -204,21 +250,29 @@ export const listUsers = async (req, res) => {
                     points: true,
                     emailVerified: true
                 }
-            }), { maxRetries: 2, timeout: 10000 })
+            }), { maxRetries: 1, timeout: 3000 })
         ]);
+        // Check abort after queries
+        if (res.headersSent || abortController?.signal?.aborted) {
+            return;
+        }
         success = true;
-        res.status(200).json({
-            data: users,
-            pagination: {
-                total: totalUsers,
-                page,
-                pageSize: limit,
-                totalPages: Math.ceil(totalUsers / limit)
-            }
-        });
+        if (!res.headersSent && !abortController?.signal?.aborted) {
+            res.status(200).json({
+                data: users,
+                pagination: {
+                    total: totalUsers,
+                    page,
+                    pageSize: limit,
+                    totalPages: Math.ceil(totalUsers / limit)
+                }
+            });
+        }
     }
     catch (error) {
         console.error("Error listing users:", error);
+        if (res.headersSent)
+            return;
         res.status(500).json({ error: "An unexpected error occurred." });
     }
     finally {
@@ -226,13 +280,17 @@ export const listUsers = async (req, res) => {
     }
 };
 /**
- * Delete a user under the current tenant - OPTIMIZED
+ * Delete a user under the current tenant - OPTIMIZED WITH ABORT CHECKING
  */
 export const deleteUser = async (req, res) => {
     const { userId } = req.params;
     const tenant = req.tenant;
     let success = false;
     try {
+        const abortController = req.abortController;
+        if (res.headersSent || abortController?.signal?.aborted) {
+            return;
+        }
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
@@ -247,22 +305,30 @@ export const deleteUser = async (req, res) => {
                 id: userId,
                 tenantId: tenant.id
             },
-        }), { maxRetries: 2, timeout: 10000 });
+        }), { maxRetries: 1, timeout: 2000 });
         if (!existingUser) {
             return res.status(404).json({ error: "User not found or not accessible" });
+        }
+        // Check abort before delete
+        if (res.headersSent || abortController?.signal?.aborted) {
+            return;
         }
         // Delete the user
         await executeQuery(() => db.user.delete({
             where: { id: userId }
-        }), { maxRetries: 2, timeout: 10000 });
+        }), { maxRetries: 1, timeout: 3000 });
         // Invalidate cache
         const cacheKey = getUserCacheKey(existingUser.walletAddress, tenant.id);
         userCache.delete(cacheKey);
         success = true;
-        res.status(200).json({ success: true, message: "User deleted successfully" });
+        if (!res.headersSent && !abortController?.signal?.aborted) {
+            res.status(200).json({ success: true, message: "User deleted successfully" });
+        }
     }
     catch (error) {
         console.error("Error deleting user:", error);
+        if (res.headersSent)
+            return;
         res.status(500).json({ error: "An unexpected error occurred." });
     }
     finally {

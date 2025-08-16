@@ -7,255 +7,139 @@ import { TenantRequest } from "../types/index.js";
 const tenantInfoCache = new Map<string, { data: any; timestamp: number }>();
 const TENANT_INFO_CACHE_TTL = 300000; // 5 minutes
 
-
 /**
- * Controller for updating tenant settings - REFACTORED WITHOUT TRANSACTIONS
+ * Controller for getting all tenant information - FIXED WITH ABORT CHECKING
  */
-// export const updateTenant = async (req: TenantRequest, res: Response) => {
-//   let success = false;
-//   const errors: string[] = [];
-//   const updates: string[] = [];
+export const getTenantInfo = async (req: TenantRequest, res: Response) => {
+  let success = false;
   
-//   try {
-//     if (!req.tenant || !req.tenant.id) {
-//       return res.status(401).json({ error: "Authenticated tenant required" });
-//     }
+  try {
+    // CRITICAL: Check if response already sent
+    const abortController = (req as any).abortController;
+    if (res.headersSent || abortController?.signal?.aborted) {
+      console.log(`[getTenantInfo] Response already sent/aborted`);
+      return;
+    }
 
-//     const tenantId = req.tenant.id;
+    // Ensure tenant is authenticated via middleware
+    if (!req.tenant || !req.tenant.id) {
+      if (!res.headersSent && !abortController?.signal?.aborted) {
+        return res.status(401).json({ error: "Authenticated tenant required" });
+      }
+      return;
+    }
     
-//     const {
-//       name,
-//       theme,
-//       primaryColor,
-//       secondaryColor,
-//       accentColor,
-//       textPrimaryColor,
-//       textSecondaryColor,
-//       logo,
-//       shortLogo,
-//       templateId,
-//       rpcEndpoint,
-//       networkCluster,
-//       defaultStreamType,
-//       defaultFundingType,
-//       enabledStreamTypes,
-//       authorizedDomains,
-//     } = req.body;
+    const tenantId = req.tenant.id;
 
-//     // Prepare tenant update data
-//     const updateData: any = {};
-//     if (name !== undefined) updateData.name = name;
-//     if (theme !== undefined) updateData.theme = theme;
-//     if (primaryColor !== undefined) updateData.primaryColor = primaryColor;
-//     if (secondaryColor !== undefined) updateData.secondaryColor = secondaryColor;
-//     if (accentColor !== undefined) updateData.accentColor = accentColor;
-//     if (textPrimaryColor !== undefined) updateData.textPrimaryColor = textPrimaryColor;
-//     if (textSecondaryColor !== undefined) updateData.textSecondaryColor = textSecondaryColor;
-//     if (logo !== undefined) updateData.logo = logo;
-//     if (shortLogo !== undefined) updateData.shortLogo = shortLogo;
-//     if (templateId !== undefined) updateData.templateId = templateId;
-//     if (rpcEndpoint !== undefined) updateData.rpcEndpoint = rpcEndpoint;
-//     if (networkCluster !== undefined) updateData.networkCluster = networkCluster;
+    // Check cache first
+    const cached = tenantInfoCache.get(tenantId);
+    if (cached && Date.now() - cached.timestamp < TENANT_INFO_CACHE_TTL) {
+      success = true;
+      if (!res.headersSent && !abortController?.signal?.aborted) {
+        return res.status(200).json(cached.data);
+      }
+      return;
+    }
 
-//     // Validate stream types
-//     if (defaultStreamType !== undefined) {
-//       if (!Object.values(StreamSessionType).includes(defaultStreamType)) {
-//         return res.status(400).json({
-//           error: "Invalid defaultStreamType",
-//           validOptions: Object.values(StreamSessionType),
-//         });
-//       }
-//       updateData.defaultStreamType = defaultStreamType;
-//     }
+    // Check before query
+    if (res.headersSent || abortController?.signal?.aborted) {
+      console.log(`[getTenantInfo] Aborted before query`);
+      return;
+    }
 
-//     if (defaultFundingType !== undefined) {
-//       if (!Object.values(StreamFundingType).includes(defaultFundingType)) {
-//         return res.status(400).json({
-//           error: "Invalid defaultFundingType",
-//           validOptions: Object.values(StreamFundingType),
-//         });
-//       }
-//       updateData.defaultFundingType = defaultFundingType;
-//     }
+    // Fetch tenant with all related info - WITH REDUCED TIMEOUT
+    const tenant = await executeQuery(
+      () => db.tenant.findUnique({
+        where: { id: tenantId },
+        include: {
+          authorizedDomains: {
+            select: { domain: true },
+            take: 100 // Limit domains
+          },
+          enabledStreamTypes: true,
+        },
+      }),
+      { maxRetries: 1, timeout: 2000 } // Reduced from 3000
+    );
 
-//     // Step 1: Update tenant basic information (if needed)
-//     if (Object.keys(updateData).length > 0) {
-//       try {
-//         await executeQuery(
-//           () => db.tenant.update({
-//             where: { id: tenantId },
-//             data: updateData,
-//           }),
-//           { maxRetries: 2, timeout: 5000 }
-//         );
-//         updates.push("Tenant settings updated");
-//       } catch (error: any) {
-//         console.error("Failed to update tenant:", error);
-//         errors.push(`Tenant update failed: ${error.message}`);
-//       }
-//     }
+    // Check after query
+    if (res.headersSent || abortController?.signal?.aborted) {
+      console.log(`[getTenantInfo] Response sent/aborted after query`);
+      return;
+    }
 
-//     // Step 2: Handle enabled stream types (upsert)
-//     if (enabledStreamTypes !== undefined) {
-//       try {
-//         await executeQuery(
-//           () => db.enabledStreamTypes.upsert({
-//             where: { tenantId },
-//             update: {
-//               enableStream: enabledStreamTypes.enableStream ?? undefined,
-//               enableMeeting: enabledStreamTypes.enableMeeting ?? undefined,
-//               enablePodcast: enabledStreamTypes.enablePodcast ?? undefined,
-//             },
-//             create: {
-//               tenantId,
-//               enableStream: enabledStreamTypes.enableStream ?? true,
-//               enableMeeting: enabledStreamTypes.enableMeeting ?? true,
-//               enablePodcast: enabledStreamTypes.enablePodcast ?? false,
-//             },
-//           }),
-//           { maxRetries: 2, timeout: 5000 }
-//         );
-//         updates.push("Stream types updated");
-//       } catch (error: any) {
-//         console.error("Failed to update stream types:", error);
-//         errors.push(`Stream types update failed: ${error.message}`);
-//       }
-//     }
+    if (!tenant) {
+      if (!res.headersSent && !abortController?.signal?.aborted) {
+        return res.status(404).json({ error: "Tenant not found" });
+      }
+      return;
+    }
 
-//     // Step 3: Handle authorized domains (separate operations)
-//     if (authorizedDomains && Array.isArray(authorizedDomains)) {
-//       // Get existing domains
-//       const existingDomains = await executeQuery(
-//         () => db.authorizedDomain.findMany({
-//           where: { tenantId },
-//           select: { domain: true, id: true },
-//         }),
-//         { maxRetries: 1, timeout: 3000 }
-//       );
+    // Format the response
+    const response = {
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        theme: tenant.theme,
+        primaryColor: tenant.primaryColor,
+        secondaryColor: tenant.secondaryColor,
+        accentColor: tenant.accentColor,
+        textPrimaryColor: tenant.textPrimaryColor,
+        textSecondaryColor: tenant.textSecondaryColor,
+        logo: tenant.logo,
+        shortLogo: tenant.shortLogo,
+        templateId: tenant.templateId,
+        rpcEndpoint: tenant.rpcEndpoint,
+        networkCluster: tenant.networkCluster,
+        creatorWallet: tenant.creatorWallet,
+        createdAt: tenant.createdAt,
+        updatedAt: tenant.updatedAt,
+        defaultStreamType: tenant.defaultStreamType,
+        defaultFundingType: tenant.defaultFundingType,
+        enabledStreamTypes: tenant.enabledStreamTypes || {
+          enableStream: true,
+          enableMeeting: true,
+          enablePodcast: false,
+        },
+        authorizedDomains: tenant.authorizedDomains.map((d) => d.domain),
+      },
+    };
 
-//       const existingDomainSet = new Set(existingDomains.map(d => d.domain));
-//       const newDomainSet = new Set(authorizedDomains);
+    // Cache the response
+    tenantInfoCache.set(tenantId, { data: response, timestamp: Date.now() });
 
-//       // Domains to add
-//       const domainsToAdd = authorizedDomains.filter(
-//         domain => !existingDomainSet.has(domain)
-//       );
-
-//       // Domains to remove
-//       const domainsToRemove = existingDomains.filter(
-//         d => !newDomainSet.has(d.domain)
-//       );
-
-//       // Add new domains (parallel, independent operations)
-//       const addPromises = domainsToAdd.map(domain =>
-//         executeQuery(
-//           () => db.authorizedDomain.create({
-//             data: { domain, tenantId }
-//           }),
-//           { maxRetries: 1, timeout: 2000 }
-//         ).catch(err => {
-//           console.error(`Failed to add domain ${domain}:`, err);
-//           errors.push(`Failed to add domain: ${domain}`);
-//         })
-//       );
-
-//       // Remove old domains (parallel, independent operations)
-//       const removePromises = domainsToRemove.map(d =>
-//         executeQuery(
-//           () => db.authorizedDomain.delete({
-//             where: { id: d.id }
-//           }),
-//           { maxRetries: 1, timeout: 2000 }
-//         ).catch(err => {
-//           console.error(`Failed to remove domain ${d.domain}:`, err);
-//           errors.push(`Failed to remove domain: ${d.domain}`);
-//         })
-//       );
-
-//       // Execute all domain operations in parallel
-//       await Promise.allSettled([...addPromises, ...removePromises]);
-      
-//       if (domainsToAdd.length > 0 || domainsToRemove.length > 0) {
-//         updates.push(`Domains updated: +${domainsToAdd.length}, -${domainsToRemove.length}`);
-//       }
-//     }
-
-//     // Clear cache after updates
-//     tenantInfoCache.delete(tenantId);
-
-//     // Fetch updated tenant with all related info
-//     const fullTenant = await executeQuery(
-//       () => db.tenant.findUnique({
-//         where: { id: tenantId },
-//         include: {
-//           authorizedDomains: {
-//             select: { domain: true },
-//           },
-//           enabledStreamTypes: true,
-//         },
-//       }),
-//       { maxRetries: 2, timeout: 5000 }
-//     );
-
-//     if (!fullTenant) {
-//       return res.status(404).json({ error: "Tenant not found" });
-//     }
-
-//     // Format the response
-//     const response = {
-//       tenant: {
-//         id: fullTenant.id,
-//         name: fullTenant.name,
-//         theme: fullTenant.theme,
-//         primaryColor: fullTenant.primaryColor,
-//         secondaryColor: fullTenant.secondaryColor,
-//         accentColor: fullTenant.accentColor,
-//         textPrimaryColor: fullTenant.textPrimaryColor,
-//         textSecondaryColor: fullTenant.textSecondaryColor,
-//         logo: fullTenant.logo,
-//         shortLogo: fullTenant.shortLogo,
-//         templateId: fullTenant.templateId,
-//         rpcEndpoint: fullTenant.rpcEndpoint,
-//         networkCluster: fullTenant.networkCluster,
-//         creatorWallet: fullTenant.creatorWallet,
-//         createdAt: fullTenant.createdAt,
-//         updatedAt: fullTenant.updatedAt,
-//         defaultStreamType: fullTenant.defaultStreamType,
-//         defaultFundingType: fullTenant.defaultFundingType,
-//         enabledStreamTypes: fullTenant.enabledStreamTypes || {
-//           enableStream: true,
-//           enableMeeting: true,
-//           enablePodcast: false,
-//         },
-//         authorizedDomains: fullTenant.authorizedDomains.map((d) => d.domain),
-//       },
-//       updates: updates.length > 0 ? updates : ["No changes made"],
-//       errors: errors.length > 0 ? errors : undefined,
-//     };
-
-//     success = errors.length === 0;
+    success = true;
     
-//     // Return appropriate status based on outcome
-//     if (errors.length > 0 && updates.length === 0) {
-//       // All operations failed
-//       return res.status(400).json(response);
-//     } else if (errors.length > 0 && updates.length > 0) {
-//       // Partial success
-//       return res.status(207).json(response); // 207 Multi-Status
-//     } else {
-//       // Complete success
-//       return res.status(200).json(response);
-//     }
-//   } catch (error) {
-//     console.error("Error updating tenant:", error);
-//     return res.status(500).json({ error: "Failed to update tenant" });
-//   } finally {
-//     trackQuery(success);
-//   }
-// };
+    // Final check before sending
+    if (!res.headersSent && !abortController?.signal?.aborted) {
+      return res.status(200).json(response);
+    }
+  } catch (error: any) {
+    console.error("Error fetching tenant:", error);
+    
+    // Check before sending error response
+    const abortController = (req as any).abortController;
+    if (res.headersSent || abortController?.signal?.aborted) {
+      console.log(`[getTenantInfo] Error after response sent/aborted`);
+      return;
+    }
+    
+    // Handle timeout specifically
+    if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+      return res.status(504).json({ 
+        error: "Database query timeout",
+        message: "The request took too long. Please try again."
+      });
+    }
+    
+    return res.status(500).json({ error: "Failed to fetch tenant information" });
+  } finally {
+    trackQuery(success);
+  }
+};
 
 /**
- * Controller for updating tenant settings - FIXED WITH TIMEOUTS
+ * Controller for updating tenant settings - FIXED WITH ABORT CHECKING
  */
 export const updateTenant = async (req: TenantRequest, res: Response) => {
   let success = false;
@@ -263,6 +147,11 @@ export const updateTenant = async (req: TenantRequest, res: Response) => {
   const updates: string[] = [];
   
   try {
+    const abortController = (req as any).abortController;
+    if (res.headersSent || abortController?.signal?.aborted) {
+      return;
+    }
+
     if (!req.tenant || !req.tenant.id) {
       return res.status(401).json({ error: "Authenticated tenant required" });
     }
@@ -324,6 +213,11 @@ export const updateTenant = async (req: TenantRequest, res: Response) => {
       updateData.defaultFundingType = defaultFundingType;
     }
 
+    // Check abort before updates
+    if (res.headersSent || abortController?.signal?.aborted) {
+      return;
+    }
+
     // Step 1: Update tenant basic information (if needed) - WITH TIMEOUT
     if (Object.keys(updateData).length > 0) {
       try {
@@ -332,7 +226,7 @@ export const updateTenant = async (req: TenantRequest, res: Response) => {
             where: { id: tenantId },
             data: updateData,
           }),
-          { maxRetries: 1, timeout: 3000 } // Reduced timeout
+          { maxRetries: 1, timeout: 2000 } // Reduced timeout
         );
         updates.push("Tenant settings updated");
       } catch (error: any) {
@@ -345,6 +239,11 @@ export const updateTenant = async (req: TenantRequest, res: Response) => {
         }
         errors.push(`Tenant update failed: ${error.message}`);
       }
+    }
+
+    // Check abort between operations
+    if (res.headersSent || abortController?.signal?.aborted) {
+      return;
     }
 
     // Step 2: Handle enabled stream types (upsert) - WITH TIMEOUT
@@ -365,13 +264,18 @@ export const updateTenant = async (req: TenantRequest, res: Response) => {
               enablePodcast: enabledStreamTypes.enablePodcast ?? false,
             },
           }),
-          { maxRetries: 1, timeout: 3000 } // Reduced timeout
+          { maxRetries: 1, timeout: 2000 } // Reduced timeout
         );
         updates.push("Stream types updated");
       } catch (error: any) {
         console.error("Failed to update stream types:", error);
         errors.push(`Stream types update failed: ${error.message}`);
       }
+    }
+
+    // Check abort before domain operations
+    if (res.headersSent || abortController?.signal?.aborted) {
+      return;
     }
 
     // Step 3: Handle authorized domains - WITH TIMEOUT AND LIMITS
@@ -440,6 +344,11 @@ export const updateTenant = async (req: TenantRequest, res: Response) => {
     // Clear cache after updates
     tenantInfoCache.delete(tenantId);
 
+    // Check abort before final fetch
+    if (res.headersSent || abortController?.signal?.aborted) {
+      return;
+    }
+
     // Fetch updated tenant with timeout
     const fullTenant = await executeQuery(
       () => db.tenant.findUnique({
@@ -493,19 +402,27 @@ export const updateTenant = async (req: TenantRequest, res: Response) => {
 
     success = errors.length === 0;
     
-    // Return appropriate status based on outcome
-    if (errors.length > 0 && updates.length === 0) {
-      // All operations failed
-      return res.status(400).json(response);
-    } else if (errors.length > 0 && updates.length > 0) {
-      // Partial success
-      return res.status(207).json(response); // 207 Multi-Status
-    } else {
-      // Complete success
-      return res.status(200).json(response);
+    // Final check before response
+    if (!res.headersSent && !abortController?.signal?.aborted) {
+      // Return appropriate status based on outcome
+      if (errors.length > 0 && updates.length === 0) {
+        // All operations failed
+        return res.status(400).json(response);
+      } else if (errors.length > 0 && updates.length > 0) {
+        // Partial success
+        return res.status(207).json(response); // 207 Multi-Status
+      } else {
+        // Complete success
+        return res.status(200).json(response);
+      }
     }
   } catch (error: any) {
     console.error("Error updating tenant:", error);
+    
+    const abortController = (req as any).abortController;
+    if (res.headersSent || abortController?.signal?.aborted) {
+      return;
+    }
     
     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
       return res.status(504).json({ 
@@ -521,299 +438,17 @@ export const updateTenant = async (req: TenantRequest, res: Response) => {
 };
 
 /**
- * Controller for getting all tenant information - FIXED WITH TIMEOUT
- */
-// export const getTenantInfo = async (req: TenantRequest, res: Response) => {
-//   let success = false;
-  
-//   try {
-//     // Ensure tenant is authenticated via middleware
-//     if (!req.tenant || !req.tenant.id) {
-//       return res.status(401).json({ error: "Authenticated tenant required" });
-//     }
-    
-//     const tenantId = req.tenant.id;
-
-//     // Check cache first
-//     const cached = tenantInfoCache.get(tenantId);
-//     if (cached && Date.now() - cached.timestamp < TENANT_INFO_CACHE_TTL) {
-//       success = true;
-//       return res.status(200).json(cached.data);
-//     }
-
-//     // Fetch tenant with all related info - WITH TIMEOUT
-//     const tenant = await executeQuery(
-//       () => db.tenant.findUnique({
-//         where: { id: tenantId },
-//         include: {
-//           authorizedDomains: {
-//             select: { domain: true },
-//             take: 100 // Limit domains
-//           },
-//           enabledStreamTypes: true,
-//         },
-//       }),
-//       { maxRetries: 1, timeout: 3000 } // Reduced timeout
-//     );
-
-//     if (!tenant) {
-//       return res.status(404).json({ error: "Tenant not found" });
-//     }
-
-//     // Format the response
-//     const response = {
-//       tenant: {
-//         id: tenant.id,
-//         name: tenant.name,
-//         theme: tenant.theme,
-//         primaryColor: tenant.primaryColor,
-//         secondaryColor: tenant.secondaryColor,
-//         accentColor: tenant.accentColor,
-//         textPrimaryColor: tenant.textPrimaryColor,
-//         textSecondaryColor: tenant.textSecondaryColor,
-//         logo: tenant.logo,
-//         shortLogo: tenant.shortLogo,
-//         templateId: tenant.templateId,
-//         rpcEndpoint: tenant.rpcEndpoint,
-//         networkCluster: tenant.networkCluster,
-//         creatorWallet: tenant.creatorWallet,
-//         createdAt: tenant.createdAt,
-//         updatedAt: tenant.updatedAt,
-//         defaultStreamType: tenant.defaultStreamType,
-//         defaultFundingType: tenant.defaultFundingType,
-//         enabledStreamTypes: tenant.enabledStreamTypes || {
-//           enableStream: true,
-//           enableMeeting: true,
-//           enablePodcast: false,
-//         },
-//         authorizedDomains: tenant.authorizedDomains.map((d) => d.domain),
-//       },
-//     };
-
-//     // Cache the response
-//     tenantInfoCache.set(tenantId, { data: response, timestamp: Date.now() });
-
-//     success = true;
-//     return res.status(200).json(response);
-//   } catch (error: any) {
-//     console.error("Error fetching tenant:", error);
-    
-//     // Handle timeout specifically
-//     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-//       return res.status(504).json({ 
-//         error: "Database query timeout",
-//         message: "The request took too long. Please try again."
-//       });
-//     }
-    
-//     return res.status(500).json({ error: "Failed to fetch tenant information" });
-//   } finally {
-//     trackQuery(success);
-//   }
-// };
-
-
-/**
- * Controller for getting all tenant information - FIXED WITH RESPONSE CHECK
- */
-export const getTenantInfo = async (req: TenantRequest, res: Response) => {
-  let success = false;
-  
-  try {
-    // CRITICAL: Check if response already sent
-    if (res.headersSent) {
-      console.log(`[getTenantInfo] Response already sent`);
-      return;
-    }
-
-    // Ensure tenant is authenticated via middleware
-    if (!req.tenant || !req.tenant.id) {
-      if (!res.headersSent) {
-        return res.status(401).json({ error: "Authenticated tenant required" });
-      }
-      return;
-    }
-    
-    const tenantId = req.tenant.id;
-
-    // Check cache first
-    const cached = tenantInfoCache.get(tenantId);
-    if (cached && Date.now() - cached.timestamp < TENANT_INFO_CACHE_TTL) {
-      success = true;
-      if (!res.headersSent) {
-        return res.status(200).json(cached.data);
-      }
-      return;
-    }
-
-    // Create abort controller for timeout
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2500); // Well before request timeout
-
-    try {
-      // Fetch tenant with all related info - WITH TIMEOUT
-      const tenant = await executeQuery(
-        () => db.tenant.findUnique({
-          where: { id: tenantId },
-          include: {
-            authorizedDomains: {
-              select: { domain: true },
-              take: 100 // Limit domains
-            },
-            enabledStreamTypes: true,
-          },
-        }),
-        { maxRetries: 1, timeout: 2000 } // Very short timeout
-      );
-
-      clearTimeout(timeout);
-
-      // Check again before processing
-      if (res.headersSent) {
-        console.log(`[getTenantInfo] Response sent while querying`);
-        return;
-      }
-
-      if (!tenant) {
-        if (!res.headersSent) {
-          return res.status(404).json({ error: "Tenant not found" });
-        }
-        return;
-      }
-
-      // Format the response
-      const response = {
-        tenant: {
-          id: tenant.id,
-          name: tenant.name,
-          theme: tenant.theme,
-          primaryColor: tenant.primaryColor,
-          secondaryColor: tenant.secondaryColor,
-          accentColor: tenant.accentColor,
-          textPrimaryColor: tenant.textPrimaryColor,
-          textSecondaryColor: tenant.textSecondaryColor,
-          logo: tenant.logo,
-          shortLogo: tenant.shortLogo,
-          templateId: tenant.templateId,
-          rpcEndpoint: tenant.rpcEndpoint,
-          networkCluster: tenant.networkCluster,
-          creatorWallet: tenant.creatorWallet,
-          createdAt: tenant.createdAt,
-          updatedAt: tenant.updatedAt,
-          defaultStreamType: tenant.defaultStreamType,
-          defaultFundingType: tenant.defaultFundingType,
-          enabledStreamTypes: tenant.enabledStreamTypes || {
-            enableStream: true,
-            enableMeeting: true,
-            enablePodcast: false,
-          },
-          authorizedDomains: tenant.authorizedDomains.map((d) => d.domain),
-        },
-      };
-
-      // Cache the response
-      tenantInfoCache.set(tenantId, { data: response, timestamp: Date.now() });
-
-      success = true;
-      
-      // Final check before sending
-      if (!res.headersSent) {
-        return res.status(200).json(response);
-      }
-    } catch (error: any) {
-      clearTimeout(timeout);
-      
-      if (controller.signal.aborted || error.name === 'AbortError') {
-        console.log(`[getTenantInfo] Query aborted - timeout approaching`);
-        if (!res.headersSent) {
-          return res.status(504).json({ 
-            error: "Request timeout",
-            message: "Query took too long. Please try again."
-          });
-        }
-        return;
-      }
-      
-      throw error;
-    }
-  } catch (error: any) {
-    console.error("Error fetching tenant:", error);
-    
-    // Check before sending error response
-    if (res.headersSent) {
-      console.log(`[getTenantInfo] Error after response sent`);
-      return;
-    }
-    
-    // Handle timeout specifically
-    if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-      return res.status(504).json({ 
-        error: "Database query timeout",
-        message: "The request took too long. Please try again."
-      });
-    }
-    
-    return res.status(500).json({ error: "Failed to fetch tenant information" });
-  } finally {
-    trackQuery(success);
-  }
-};
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of tenantInfoCache.entries()) {
-    if (now - value.timestamp > TENANT_INFO_CACHE_TTL) {
-      tenantInfoCache.delete(key);
-    }
-  }
-}, 300000); // Clean every 5 minutes
-
-/**
- * Get all authorized domains for the current tenant
- */
-// export const getAuthorizedDomains = async (req: TenantRequest, res: Response) => {
-//   let success = false;
-  
-//   try {
-//     const tenant = req.tenant;
-    
-//     if (!tenant) {
-//       return res.status(401).json({ error: "Tenant authentication required." });
-//     }
-
-//     const domains = await executeQuery(
-//       () => db.authorizedDomain.findMany({
-//         where: { tenantId: tenant.id },
-//         select: {
-//           id: true,
-//           domain: true,
-//           createdAt: true
-//         },
-//         orderBy: { createdAt: 'desc' }
-//       }),
-//       { maxRetries: 2, timeout: 10000 }
-//     );
-
-//     success = true;
-//     res.status(200).json({
-//       domains,
-//       count: domains.length
-//     });
-//   } catch (error) {
-//     console.error("Error fetching authorized domains:", error);
-//     res.status(500).json({ error: "Internal server error" });
-//   } finally {
-//     trackQuery(success);
-//   }
-// };
-
-/**
  * Get all authorized domains for the current tenant - FIXED
  */
 export const getAuthorizedDomains = async (req: TenantRequest, res: Response) => {
   let success = false;
   
   try {
+    const abortController = (req as any).abortController;
+    if (res.headersSent || abortController?.signal?.aborted) {
+      return;
+    }
+
     const tenant = req.tenant;
     
     if (!tenant) {
@@ -835,12 +470,17 @@ export const getAuthorizedDomains = async (req: TenantRequest, res: Response) =>
     );
 
     success = true;
-    res.status(200).json({
-      domains,
-      count: domains.length
-    });
+    
+    if (!res.headersSent && !abortController?.signal?.aborted) {
+      res.status(200).json({
+        domains,
+        count: domains.length
+      });
+    }
   } catch (error: any) {
     console.error("Error fetching authorized domains:", error);
+    
+    if (res.headersSent) return;
     
     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
       return res.status(504).json({ 
@@ -862,6 +502,11 @@ export const addAuthorizedDomain = async (req: TenantRequest, res: Response) => 
   let success = false;
   
   try {
+    const abortController = (req as any).abortController;
+    if (res.headersSent || abortController?.signal?.aborted) {
+      return;
+    }
+
     const tenant = req.tenant;
     const { domain } = req.body;
     
@@ -904,7 +549,7 @@ export const addAuthorizedDomain = async (req: TenantRequest, res: Response) => 
           tenantId: tenant.id
         }
       }),
-      { maxRetries: 1, timeout: 5000 }
+      { maxRetries: 1, timeout: 2000 }
     );
 
     if (existing) {
@@ -922,16 +567,22 @@ export const addAuthorizedDomain = async (req: TenantRequest, res: Response) => 
           tenantId: tenant.id
         }
       }),
-      { maxRetries: 2, timeout: 10000 }
+      { maxRetries: 2, timeout: 3000 }
     );
 
     success = true;
-    res.status(201).json({
-      message: "Domain authorized successfully",
-      domain: authorizedDomain
-    });
+    
+    if (!res.headersSent && !abortController?.signal?.aborted) {
+      res.status(201).json({
+        message: "Domain authorized successfully",
+        domain: authorizedDomain
+      });
+    }
   } catch (error) {
     console.error("Error adding authorized domain:", error);
+    
+    if (res.headersSent) return;
+    
     res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
@@ -945,6 +596,11 @@ export const removeAuthorizedDomain = async (req: TenantRequest, res: Response) 
   let success = false;
   
   try {
+    const abortController = (req as any).abortController;
+    if (res.headersSent || abortController?.signal?.aborted) {
+      return;
+    }
+
     const tenant = req.tenant;
     const { domainId } = req.params;
     
@@ -964,7 +620,7 @@ export const removeAuthorizedDomain = async (req: TenantRequest, res: Response) 
           tenantId: tenant.id
         }
       }),
-      { maxRetries: 1, timeout: 5000 }
+      { maxRetries: 1, timeout: 2000 }
     );
 
     if (!domain) {
@@ -976,16 +632,22 @@ export const removeAuthorizedDomain = async (req: TenantRequest, res: Response) 
       () => db.authorizedDomain.delete({
         where: { id: domainId }
       }),
-      { maxRetries: 2, timeout: 10000 }
+      { maxRetries: 2, timeout: 3000 }
     );
 
     success = true;
-    res.status(200).json({
-      message: "Domain removed successfully",
-      domain: domain.domain
-    });
+    
+    if (!res.headersSent && !abortController?.signal?.aborted) {
+      res.status(200).json({
+        message: "Domain removed successfully",
+        domain: domain.domain
+      });
+    }
   } catch (error) {
     console.error("Error removing authorized domain:", error);
+    
+    if (res.headersSent) return;
+    
     res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
@@ -999,6 +661,11 @@ export const bulkAddAuthorizedDomains = async (req: TenantRequest, res: Response
   let success = false;
   
   try {
+    const abortController = (req as any).abortController;
+    if (res.headersSent || abortController?.signal?.aborted) {
+      return;
+    }
+
     const tenant = req.tenant;
     const { domains } = req.body;
     
@@ -1022,11 +689,15 @@ export const bulkAddAuthorizedDomains = async (req: TenantRequest, res: Response
 
     for (const domain of domains) {
       try {
+        // Check abort in loop
+        if (res.headersSent || abortController?.signal?.aborted) {
+          break;
+        }
+
         // Normalize domain (KEEP subdomains)
         let normalizedDomain = domain.trim().toLowerCase()
           .replace(/^https?:\/\//, '')
           .replace(/\/$/, '');
-        // DON'T remove www. - treat as separate domain
 
         // Check if already exists
         const existing = await executeQuery(
@@ -1036,7 +707,7 @@ export const bulkAddAuthorizedDomains = async (req: TenantRequest, res: Response
               tenantId: tenant.id
             }
           }),
-          { maxRetries: 1, timeout: 5000 }
+          { maxRetries: 1, timeout: 2000 }
         );
 
         if (existing) {
@@ -1052,7 +723,7 @@ export const bulkAddAuthorizedDomains = async (req: TenantRequest, res: Response
               tenantId: tenant.id
             }
           }),
-          { maxRetries: 1, timeout: 5000 }
+          { maxRetries: 1, timeout: 2000 }
         );
 
         results.added.push(normalizedDomain);
@@ -1062,14 +733,30 @@ export const bulkAddAuthorizedDomains = async (req: TenantRequest, res: Response
     }
 
     success = true;
-    res.status(200).json({
-      message: "Bulk domain authorization completed",
-      results
-    });
+    
+    if (!res.headersSent && !abortController?.signal?.aborted) {
+      res.status(200).json({
+        message: "Bulk domain authorization completed",
+        results
+      });
+    }
   } catch (error) {
     console.error("Error in bulk domain authorization:", error);
+    
+    if (res.headersSent) return;
+    
     res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
   }
 };
+
+// Periodic cache cleanup
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of tenantInfoCache.entries()) {
+    if (now - value.timestamp > TENANT_INFO_CACHE_TTL) {
+      tenantInfoCache.delete(key);
+    }
+  }
+}, 300000); // Clean every 5 minutes
