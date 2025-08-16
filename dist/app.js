@@ -14,8 +14,7 @@
 //   MonitorRouter
 // } from "./routes/index.js";
 // import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
-// // Use the simpler version to avoid TypeScript issues with redirect overloading
-// import { responseGuard } from "./middlewares/response-guard.middleware.js";
+// // import { responseGuard } from "./middlewares/response-guard.middleware.js";
 // import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
 // import createSocketServer from "./websocket.js";
 // import { isDatabaseHealthy, getDatabaseMetrics, db, executeQuery } from "./prisma.js";
@@ -23,7 +22,8 @@
 // const app = express();
 // const PORT = process.env.PORT || 8001;
 // const httpServer = createServer(app);
-// const MAX_REQUEST_TIMEOUT = parseInt(process.env.MAX_REQUEST_TIMEOUT || '30000');
+// // REDUCED timeout - override environment variable if it's too high
+// const MAX_REQUEST_TIMEOUT = Math.min(parseInt(process.env.MAX_REQUEST_TIMEOUT || '15000'), 15000);
 // export const wss = createSocketServer(httpServer);
 // // Trust proxy (important for Railway/Render/Heroku) - MUST BE FIRST
 // app.set('trust proxy', true);
@@ -125,23 +125,17 @@
 //       // Your own admin dashboard domains (if applicable)
 //       const adminDomains = process.env.ADMIN_DOMAINS 
 //         ? process.env.ADMIN_DOMAINS.split(',').map(o => o.trim())
-//         : [
-//           // Add your admin dashboard domain here if you have one
-//           // 'https://admin.yourservice.com',
-//           // 'https://dashboard.yourservice.com'
-//         ];
+//         : [];
 //       if (adminDomains.length > 0 && adminDomains.some(allowed => origin.startsWith(allowed))) {
 //         res.setHeader('Access-Control-Allow-Origin', origin);
 //       } else {
 //         // For SDK-based SaaS, we need to be permissive during onboarding
-//         // Tenants need to test before adding their domain to authorized list
 //         if (process.env.STRICT_CORS === 'true') {
 //           // Strict mode: Only allow registered domains
 //           console.warn(`CORS: Blocked unregistered origin: ${origin}`);
 //           // Don't set Access-Control-Allow-Origin header - this will block the request
 //         } else {
 //           // Permissive mode: Allow but log for monitoring
-//           // This allows tenants to test integration before registering their domain
 //           console.log(`CORS: Allowing unregistered origin: ${origin} (consider adding to authorized domains)`);
 //           res.setHeader('Access-Control-Allow-Origin', origin);
 //         }
@@ -169,7 +163,7 @@
 // // RESPONSE GUARD MIDDLEWARE - CRITICAL!
 // // This prevents ERR_HTTP_HEADERS_SENT errors
 // // ============================================
-// app.use(responseGuard);
+// // app.use(responseGuard);
 // // Request ID middleware for tracing
 // app.use((req: Request, res: Response, next) => {
 //   req.id = req.headers['x-request-id'] as string || 
@@ -255,7 +249,10 @@
 //     next();
 //   });
 // }
-// // Request timeout middleware with better cleanup
+// // ============================================
+// // IMPROVED REQUEST TIMEOUT MIDDLEWARE
+// // Fixed to not wrap response methods at all
+// // ============================================
 // app.use((req: Request, res: Response, next) => {
 //   // Skip timeout for specific endpoints
 //   if (['/health', '/ready', '/monitor/db-health'].includes(req.path)) {
@@ -272,21 +269,36 @@
 //       }
 //     }
 //   };
+//   // Add abort controller to request for controllers to check
+//   (req as any).abortController = new AbortController();
+//   // Set up timeout handler
 //   timeoutHandle = setTimeout(() => {
-//     if (!res.headersSent) {
-//       console.error(`Request timeout: ${req.method} ${req.path}`);
-//       res.status(504).json({ 
-//         error: "Request timeout",
-//         code: "REQUEST_TIMEOUT",
-//         timeout: MAX_REQUEST_TIMEOUT
-//       });
+//     if (!res.headersSent && !cleaned) {
+//       console.error(`[TIMEOUT] Request timeout after ${MAX_REQUEST_TIMEOUT}ms: ${req.method} ${req.path}`);
+//       // Try to abort any ongoing database queries
+//       if ((req as any).abortController) {
+//         (req as any).abortController.abort();
+//       }
+//       // Mark request as timed out
+//       (req as any).timedOut = true;
+//       try {
+//         res.status(504).json({ 
+//           error: "Request timeout - operation took too long",
+//           code: "REQUEST_TIMEOUT",
+//           timeout: MAX_REQUEST_TIMEOUT,
+//           path: req.path
+//         });
+//       } catch (err) {
+//         console.error('[TIMEOUT] Failed to send timeout response:', err);
+//       }
 //       cleanup();
 //     }
 //   }, MAX_REQUEST_TIMEOUT);
-//   // Clear timeout when response is sent
+//   // Clear timeout when response is complete
 //   res.on('finish', cleanup);
 //   res.on('close', cleanup);
 //   res.on('error', cleanup);
+//   // DON'T wrap any response methods - let response-guard handle that
 //   next();
 // });
 // // Delay participant reconciliation startup
@@ -449,6 +461,7 @@
 // ║ Node:        ${process.version.padEnd(27)}║
 // ║ Platform:    ${process.platform.padEnd(27)}║
 // ║ PID:         ${process.pid.toString().padEnd(27)}║
+// ║ Timeout:     ${(MAX_REQUEST_TIMEOUT + 'ms').padEnd(27)}║
 // ╚═════════════════════════════════════════╝
 //   `);
 //   if (!process.env.DATABASE_URL) {
@@ -460,6 +473,7 @@
 //   console.log(`🔄 CORS: Cache will refresh every ${CACHE_REFRESH_INTERVAL/1000} seconds`);
 //   console.log('🔄 CORS: Localhost allowed:', process.env.ALLOW_LOCALHOST === 'true' ? 'Yes' : 'No');
 //   console.log('🔄 CORS: Strict mode:', process.env.STRICT_CORS === 'true' ? 'Yes (block unknown origins)' : 'No (allow with warning)');
+//   console.log(`⏱️  Request timeout: ${MAX_REQUEST_TIMEOUT}ms`);
 //   // Check database health on startup
 //   setTimeout(async () => {
 //     try {
@@ -489,6 +503,7 @@ import { createServer } from "http";
 import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 // import { responseGuard } from "./middlewares/response-guard.middleware.js";
+import { responseGuardDebugOnly } from "./middlewares/response-guard.middleware.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
 import { isDatabaseHealthy, getDatabaseMetrics, db, executeQuery } from "./prisma.js";
@@ -635,10 +650,10 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // ============================================
-// RESPONSE GUARD MIDDLEWARE - CRITICAL!
-// This prevents ERR_HTTP_HEADERS_SENT errors
+// RESPONSE GUARD MIDDLEWARE - DEBUG MODE
+// Using debug-only version to find the real issue
 // ============================================
-// app.use(responseGuard);
+app.use(responseGuardDebugOnly);
 // Request ID middleware for tracing
 app.use((req, res, next) => {
     req.id = req.headers['x-request-id'] ||

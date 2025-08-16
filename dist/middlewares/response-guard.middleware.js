@@ -1,3 +1,5 @@
+// // middlewares/response-guard.middleware.ts
+// import { Request, Response, NextFunction } from "express";
 /**
  * Middleware to prevent ERR_HTTP_HEADERS_SENT errors
  * Tracks if response has been sent and prevents double sends
@@ -7,33 +9,41 @@ export function responseGuard(req, res, next) {
     const originalJson = res.json;
     const originalStatus = res.status;
     const originalRedirect = res.redirect;
+    const originalEnd = res.end;
     let responseSent = false;
     const requestPath = req.path;
     const requestMethod = req.method;
+    const requestId = req.id || 'no-id';
     // Helper to check if response can be sent
     const canSendResponse = () => {
         if (responseSent) {
-            console.error(`[ResponseGuard] Attempted to send response twice for ${requestMethod} ${requestPath}`);
+            console.error(`[ResponseGuard] Attempted to send response twice for ${requestMethod} ${requestPath} (request-id: ${requestId})`);
+            console.error(`[ResponseGuard] Response was already marked as sent`);
             console.trace(); // Log stack trace to find the issue
             return false;
         }
         if (res.headersSent) {
-            console.error(`[ResponseGuard] Headers already sent for ${requestMethod} ${requestPath}`);
+            console.error(`[ResponseGuard] Headers already sent for ${requestMethod} ${requestPath} (request-id: ${requestId})`);
+            console.error(`[ResponseGuard] This should not happen - responseSent=${responseSent}`);
             return false;
         }
         return true;
     };
-    // Wrap res.send with proper typing
+    // Wrap res.send
     res.send = function (body) {
-        if (!canSendResponse())
+        if (!canSendResponse()) {
+            console.error(`[ResponseGuard] Blocking duplicate send for ${requestMethod} ${requestPath}`);
             return res;
+        }
         responseSent = true;
         return originalSend.call(res, body);
     };
-    // Wrap res.json with proper typing
+    // Wrap res.json
     res.json = function (body) {
-        if (!canSendResponse())
+        if (!canSendResponse()) {
+            console.error(`[ResponseGuard] Blocking duplicate json for ${requestMethod} ${requestPath}`);
             return res;
+        }
         responseSent = true;
         return originalJson.call(res, body);
     };
@@ -45,33 +55,33 @@ export function responseGuard(req, res, next) {
         }
         return originalStatus.call(res, code);
     };
-    // Wrap res.redirect with all overloads handled
-    // Store the original function reference with proper typing
-    const originalRedirectFunc = originalRedirect;
-    // Create new redirect function that handles all cases
+    // Wrap res.redirect
     res.redirect = function (...args) {
-        if (!canSendResponse())
+        if (!canSendResponse()) {
+            console.error(`[ResponseGuard] Blocking duplicate redirect for ${requestMethod} ${requestPath}`);
             return;
+        }
         responseSent = true;
         // Handle different argument patterns
         if (args.length === 1) {
-            // redirect(url)
-            return originalRedirectFunc.call(res, args[0]);
+            return originalRedirect.apply(res, args);
         }
         else if (args.length === 2) {
-            if (typeof args[0] === 'number') {
-                // redirect(status, url)
-                return originalRedirectFunc.call(res, args[0], args[1]);
-            }
-            else {
-                // redirect(url, status)
-                return originalRedirectFunc.call(res, args[0], args[1]);
-            }
+            // Use apply to handle both (status, url) and (url, status) signatures safely
+            return originalRedirect.apply(res, args);
         }
         else {
-            // Fallback for any other case
-            return originalRedirectFunc.apply(res, args);
+            return originalRedirect.apply(res, args);
         }
+    };
+    // Wrap res.end
+    res.end = function (...args) {
+        if (!canSendResponse()) {
+            console.error(`[ResponseGuard] Blocking duplicate end for ${requestMethod} ${requestPath}`);
+            return res;
+        }
+        responseSent = true;
+        return originalEnd.apply(res, args);
     };
     // Add response tracking
     res.on('finish', () => {
@@ -86,6 +96,36 @@ export function responseGuard(req, res, next) {
     res.on('error', (error) => {
         console.error(`[ResponseGuard] Response error for ${requestMethod} ${requestPath}:`, error);
     });
+    next();
+}
+/**
+ * Simpler version that just logs but doesn't block
+ */
+export function responseGuardDebugOnly(req, res, next) {
+    const originalSend = res.send;
+    const originalJson = res.json;
+    const requestPath = req.path;
+    const requestMethod = req.method;
+    const requestId = req.id || 'no-id';
+    let callCount = 0;
+    // Wrap res.send
+    res.send = function (body) {
+        callCount++;
+        if (callCount > 1) {
+            console.error(`[ResponseGuard-Debug] Multiple send calls (${callCount}) for ${requestMethod} ${requestPath} (request-id: ${requestId})`);
+            console.trace();
+        }
+        return originalSend.call(res, body);
+    };
+    // Wrap res.json
+    res.json = function (body) {
+        callCount++;
+        if (callCount > 1) {
+            console.error(`[ResponseGuard-Debug] Multiple json calls (${callCount}) for ${requestMethod} ${requestPath} (request-id: ${requestId})`);
+            console.trace();
+        }
+        return originalJson.call(res, body);
+    };
     next();
 }
 /**
@@ -107,7 +147,6 @@ export function asyncHandler(fn) {
 }
 /**
  * Wrapper for async route handlers to prevent unhandled rejections
- * Usage: app.get('/route', asyncRoute(async (req, res) => { ... }))
  */
 export function asyncRoute(fn) {
     return (req, res, next) => {
