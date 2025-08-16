@@ -113,6 +113,7 @@ export const getStreamParticipants = async (
   req: TenantRequest,
   res: Response
 ) => {
+   console.log('[DEBUG] getStreamParticipants V2 - WITH HEADER CHECKS');
   const { streamId } = req.params;
   const tenant = req.tenant;
   let success = false;

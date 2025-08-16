@@ -90,6 +90,7 @@ const PARTICIPANT_CACHE_TTL = 30000; // 30 seconds
  * Controller for getting all stream participants - FIXED WITH RESPONSE CHECK
  */
 export const getStreamParticipants = async (req, res) => {
+    console.log('[DEBUG] getStreamParticipants V2 - WITH HEADER CHECKS');
     const { streamId } = req.params;
     const tenant = req.tenant;
     let success = false;
