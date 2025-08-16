@@ -839,7 +839,7 @@ if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_REQUEST_LOGGING 
 
 // ============================================
 // IMPROVED REQUEST TIMEOUT MIDDLEWARE
-// Fixed to not double-wrap response methods
+// Fixed to not wrap response methods at all
 // ============================================
 app.use((req: Request, res: Response, next) => {
   // Skip timeout for specific endpoints
@@ -896,31 +896,7 @@ app.use((req: Request, res: Response, next) => {
   res.on('close', cleanup);
   res.on('error', cleanup);
   
-  // Also cleanup if headers are sent by other means
-  const originalSend = res.send;
-  const originalJson = res.json;
-  const originalEnd = res.end;
-  
-  // Only wrap if not already wrapped by response-guard
-  if (!(res as any).__timeoutWrapped) {
-    (res as any).__timeoutWrapped = true;
-    
-    res.send = function(body?: any): Response {
-      cleanup();
-      return originalSend.call(this, body);
-    };
-    
-    res.json = function(body?: any): Response {
-      cleanup();
-      return originalJson.call(this, body);
-    };
-    
-    res.end = function(...args: any[]): any {
-      cleanup();
-      // Cast to any to avoid TypeScript overload issues
-      return (originalEnd as any).apply(this, args);
-    };
-  }
+  // DON'T wrap any response methods - let response-guard handle that
   
   next();
 });
