@@ -11,15 +11,15 @@ const TENANT_INFO_CACHE_TTL = 300000; // 5 minutes
  * Controller for getting all tenant information - FIXED WITH SINGLE RESPONSE
  */
 export const getTenantInfo = async (req: TenantRequest, res: Response) => {
+  // Guard: Check if response already sent at the very beginning
+  if (res.headersSent) {
+    console.log(`[getTenantInfo] Response already sent at start`);
+    return;
+  }
+  
   let success = false;
   
   try {
-    // CRITICAL: Check if response already sent at the very beginning
-    if (res.headersSent) {
-      console.log(`[getTenantInfo] Response already sent at start`);
-      return;
-    }
-
     const abortController = (req as any).abortController;
     if (abortController?.signal?.aborted) {
       console.log(`[getTenantInfo] Request already aborted at start`);
@@ -28,10 +28,8 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
 
     // Ensure tenant is authenticated via middleware
     if (!req.tenant || !req.tenant.id) {
-      if (!res.headersSent && !abortController?.signal?.aborted) {
-        res.status(401).json({ error: "Authenticated tenant required" });
-      }
-      return; // Make sure to return after sending response
+      res.status(401).json({ error: "Authenticated tenant required" });
+      return; // CRITICAL: Return immediately after sending response
     }
     
     const tenantId = req.tenant.id;
@@ -40,10 +38,8 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
     const cached = tenantInfoCache.get(tenantId);
     if (cached && Date.now() - cached.timestamp < TENANT_INFO_CACHE_TTL) {
       success = true;
-      if (!res.headersSent && !abortController?.signal?.aborted) {
-        res.status(200).json(cached.data);
-      }
-      return; // Make sure to return after sending response
+      res.status(200).json(cached.data);
+      return; // CRITICAL: Return immediately after sending response
     }
 
     // Check before query
@@ -74,10 +70,8 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
     }
 
     if (!tenant) {
-      if (!res.headersSent && !abortController?.signal?.aborted) {
-        res.status(404).json({ error: "Tenant not found" });
-      }
-      return; // Make sure to return after sending response
+      res.status(404).json({ error: "Tenant not found" });
+      return; // CRITICAL: Return immediately after sending response
     }
 
     // Format the response
@@ -116,20 +110,24 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
     success = true;
     
     // Final check before sending
-    if (!res.headersSent && !abortController?.signal?.aborted) {
-      res.status(200).json(response);
+    if (res.headersSent) {
+      console.log(`[getTenantInfo] Response already sent before final send`);
+      return;
     }
-    return; // Explicit return
+    
+    res.status(200).json(response);
+    return; // CRITICAL: Return immediately after sending response
+    
   } catch (error: any) {
     console.error("Error fetching tenant:", error);
     
     // Check before sending error response
-    const abortController = (req as any).abortController;
     if (res.headersSent) {
       console.log(`[getTenantInfo] Error after response sent`);
       return;
     }
     
+    const abortController = (req as any).abortController;
     if (abortController?.signal?.aborted) {
       console.log(`[getTenantInfo] Error after abort`);
       return;
@@ -137,19 +135,15 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
     
     // Handle timeout specifically
     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-      if (!res.headersSent) {
-        res.status(504).json({ 
-          error: "Database query timeout",
-          message: "The request took too long. Please try again."
-        });
-      }
+      res.status(504).json({ 
+        error: "Database query timeout",
+        message: "The request took too long. Please try again."
+      });
       return;
     }
     
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Failed to fetch tenant information" });
-    }
-    return; // Explicit return
+    res.status(500).json({ error: "Failed to fetch tenant information" });
+    return;
   } finally {
     trackQuery(success);
   }

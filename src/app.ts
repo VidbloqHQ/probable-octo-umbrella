@@ -757,17 +757,32 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Request ID middleware for tracing - MUST BE BEFORE response guard
+app.use((req: Request, res: Response, next) => {
+  (req as any).id = req.headers['x-request-id'] as string || 
+           `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  res.setHeader('x-request-id', (req as any).id);
+  
+  // Add a flag to track if this request has been processed
+  (req as any).processed = false;
+  
+  next();
+});
+
 // ============================================
 // RESPONSE GUARD MIDDLEWARE - DEBUG MODE
 // Using debug-only version to find the real issue
 // ============================================
 app.use(responseGuardDebugOnly);
 
-// Request ID middleware for tracing
+// Middleware to prevent duplicate processing
 app.use((req: Request, res: Response, next) => {
-  req.id = req.headers['x-request-id'] as string || 
-           `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  res.setHeader('x-request-id', req.id);
+  // Track if we've already started processing this request
+  if ((req as any).processed) {
+    console.warn(`[DUPLICATE] Request already processed: ${req.method} ${req.path} (${(req as any).id})`);
+    return; // Don't call next() to stop processing
+  }
+  (req as any).processed = true;
   next();
 });
 
