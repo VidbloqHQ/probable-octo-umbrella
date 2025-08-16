@@ -496,8 +496,8 @@ import { getAuthStats } from "./middlewares/tenant-auth.middleware.js";
 const app = express();
 const PORT = process.env.PORT || 8001;
 const httpServer = createServer(app);
-// REDUCED timeout from 30 seconds to 15 seconds
-const MAX_REQUEST_TIMEOUT = parseInt(process.env.MAX_REQUEST_TIMEOUT || '15000');
+// REDUCED timeout - override environment variable if it's too high
+const MAX_REQUEST_TIMEOUT = Math.min(parseInt(process.env.MAX_REQUEST_TIMEOUT || '15000'), 15000);
 export const wss = createSocketServer(httpServer);
 // Trust proxy (important for Railway/Render/Heroku) - MUST BE FIRST
 app.set('trust proxy', true);

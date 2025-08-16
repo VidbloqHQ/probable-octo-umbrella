@@ -8,25 +8,30 @@ const tenantInfoCache = new Map<string, { data: any; timestamp: number }>();
 const TENANT_INFO_CACHE_TTL = 300000; // 5 minutes
 
 /**
- * Controller for getting all tenant information - FIXED WITH ABORT CHECKING
+ * Controller for getting all tenant information - FIXED WITH SINGLE RESPONSE
  */
 export const getTenantInfo = async (req: TenantRequest, res: Response) => {
   let success = false;
   
   try {
-    // CRITICAL: Check if response already sent
+    // CRITICAL: Check if response already sent at the very beginning
+    if (res.headersSent) {
+      console.log(`[getTenantInfo] Response already sent at start`);
+      return;
+    }
+
     const abortController = (req as any).abortController;
-    if (res.headersSent || abortController?.signal?.aborted) {
-      console.log(`[getTenantInfo] Response already sent/aborted`);
+    if (abortController?.signal?.aborted) {
+      console.log(`[getTenantInfo] Request already aborted at start`);
       return;
     }
 
     // Ensure tenant is authenticated via middleware
     if (!req.tenant || !req.tenant.id) {
       if (!res.headersSent && !abortController?.signal?.aborted) {
-        return res.status(401).json({ error: "Authenticated tenant required" });
+        res.status(401).json({ error: "Authenticated tenant required" });
       }
-      return;
+      return; // Make sure to return after sending response
     }
     
     const tenantId = req.tenant.id;
@@ -36,9 +41,9 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
     if (cached && Date.now() - cached.timestamp < TENANT_INFO_CACHE_TTL) {
       success = true;
       if (!res.headersSent && !abortController?.signal?.aborted) {
-        return res.status(200).json(cached.data);
+        res.status(200).json(cached.data);
       }
-      return;
+      return; // Make sure to return after sending response
     }
 
     // Check before query
@@ -70,9 +75,9 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
 
     if (!tenant) {
       if (!res.headersSent && !abortController?.signal?.aborted) {
-        return res.status(404).json({ error: "Tenant not found" });
+        res.status(404).json({ error: "Tenant not found" });
       }
-      return;
+      return; // Make sure to return after sending response
     }
 
     // Format the response
@@ -112,27 +117,39 @@ export const getTenantInfo = async (req: TenantRequest, res: Response) => {
     
     // Final check before sending
     if (!res.headersSent && !abortController?.signal?.aborted) {
-      return res.status(200).json(response);
+      res.status(200).json(response);
     }
+    return; // Explicit return
   } catch (error: any) {
     console.error("Error fetching tenant:", error);
     
     // Check before sending error response
     const abortController = (req as any).abortController;
-    if (res.headersSent || abortController?.signal?.aborted) {
-      console.log(`[getTenantInfo] Error after response sent/aborted`);
+    if (res.headersSent) {
+      console.log(`[getTenantInfo] Error after response sent`);
+      return;
+    }
+    
+    if (abortController?.signal?.aborted) {
+      console.log(`[getTenantInfo] Error after abort`);
       return;
     }
     
     // Handle timeout specifically
     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-      return res.status(504).json({ 
-        error: "Database query timeout",
-        message: "The request took too long. Please try again."
-      });
+      if (!res.headersSent) {
+        res.status(504).json({ 
+          error: "Database query timeout",
+          message: "The request took too long. Please try again."
+        });
+      }
+      return;
     }
     
-    return res.status(500).json({ error: "Failed to fetch tenant information" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to fetch tenant information" });
+    }
+    return; // Explicit return
   } finally {
     trackQuery(success);
   }
