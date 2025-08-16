@@ -839,6 +839,7 @@ if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_REQUEST_LOGGING 
 
 // ============================================
 // IMPROVED REQUEST TIMEOUT MIDDLEWARE
+// Fixed to not double-wrap response methods
 // ============================================
 app.use((req: Request, res: Response, next) => {
   // Skip timeout for specific endpoints
@@ -848,7 +849,6 @@ app.use((req: Request, res: Response, next) => {
 
   let timeoutHandle: NodeJS.Timeout | null = null;
   let cleaned = false;
-  let responseStarted = false;
 
   const cleanup = () => {
     if (!cleaned) {
@@ -860,49 +860,21 @@ app.use((req: Request, res: Response, next) => {
     }
   };
 
-  // Track when response starts - Fix TypeScript issues with proper typing
-  const originalSend = res.send.bind(res);
-  const originalJson = res.json.bind(res);
-  const originalStatus = res.status.bind(res);
-  const originalEnd = res.end.bind(res);
+  // Add abort controller to request for controllers to check
+  (req as any).abortController = new AbortController();
   
-  res.send = function(body?: any): Response {
-    responseStarted = true;
-    cleanup();
-    return originalSend(body);
-  };
-  
-  res.json = function(body?: any): Response {
-    responseStarted = true;
-    cleanup();
-    return originalJson(body);
-  };
-
-  res.end = function(chunk?: any, encoding?: any): Response {
-    responseStarted = true;
-    cleanup();
-    if (typeof chunk === 'function') {
-      return originalEnd(chunk);
-    }
-    return originalEnd(chunk, encoding);
-  };
-  
-  res.status = function(code: number): Response {
-    // Don't mark as started yet - status() is often chained
-    return originalStatus(code);
-  };
-
+  // Set up timeout handler
   timeoutHandle = setTimeout(() => {
-    if (!responseStarted && !res.headersSent && !cleaned) {
+    if (!res.headersSent && !cleaned) {
       console.error(`[TIMEOUT] Request timeout after ${MAX_REQUEST_TIMEOUT}ms: ${req.method} ${req.path}`);
-      
-      // Mark that we're sending a timeout response
-      responseStarted = true;
       
       // Try to abort any ongoing database queries
       if ((req as any).abortController) {
         (req as any).abortController.abort();
       }
+      
+      // Mark request as timed out
+      (req as any).timedOut = true;
       
       try {
         res.status(504).json({ 
@@ -924,8 +896,31 @@ app.use((req: Request, res: Response, next) => {
   res.on('close', cleanup);
   res.on('error', cleanup);
   
-  // Add abort controller to request for controllers to check
-  (req as any).abortController = new AbortController();
+  // Also cleanup if headers are sent by other means
+  const originalSend = res.send;
+  const originalJson = res.json;
+  const originalEnd = res.end;
+  
+  // Only wrap if not already wrapped by response-guard
+  if (!(res as any).__timeoutWrapped) {
+    (res as any).__timeoutWrapped = true;
+    
+    res.send = function(body?: any): Response {
+      cleanup();
+      return originalSend.call(this, body);
+    };
+    
+    res.json = function(body?: any): Response {
+      cleanup();
+      return originalJson.call(this, body);
+    };
+    
+    res.end = function(...args: any[]): any {
+      cleanup();
+      // Cast to any to avoid TypeScript overload issues
+      return (originalEnd as any).apply(this, args);
+    };
+  }
   
   next();
 });

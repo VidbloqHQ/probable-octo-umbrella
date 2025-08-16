@@ -729,6 +729,7 @@ if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_REQUEST_LOGGING 
 }
 // ============================================
 // IMPROVED REQUEST TIMEOUT MIDDLEWARE
+// Fixed to not double-wrap response methods
 // ============================================
 app.use((req, res, next) => {
     // Skip timeout for specific endpoints
@@ -737,7 +738,6 @@ app.use((req, res, next) => {
     }
     let timeoutHandle = null;
     let cleaned = false;
-    let responseStarted = false;
     const cleanup = () => {
         if (!cleaned) {
             cleaned = true;
@@ -747,42 +747,18 @@ app.use((req, res, next) => {
             }
         }
     };
-    // Track when response starts - Fix TypeScript issues with proper typing
-    const originalSend = res.send.bind(res);
-    const originalJson = res.json.bind(res);
-    const originalStatus = res.status.bind(res);
-    const originalEnd = res.end.bind(res);
-    res.send = function (body) {
-        responseStarted = true;
-        cleanup();
-        return originalSend(body);
-    };
-    res.json = function (body) {
-        responseStarted = true;
-        cleanup();
-        return originalJson(body);
-    };
-    res.end = function (chunk, encoding) {
-        responseStarted = true;
-        cleanup();
-        if (typeof chunk === 'function') {
-            return originalEnd(chunk);
-        }
-        return originalEnd(chunk, encoding);
-    };
-    res.status = function (code) {
-        // Don't mark as started yet - status() is often chained
-        return originalStatus(code);
-    };
+    // Add abort controller to request for controllers to check
+    req.abortController = new AbortController();
+    // Set up timeout handler
     timeoutHandle = setTimeout(() => {
-        if (!responseStarted && !res.headersSent && !cleaned) {
+        if (!res.headersSent && !cleaned) {
             console.error(`[TIMEOUT] Request timeout after ${MAX_REQUEST_TIMEOUT}ms: ${req.method} ${req.path}`);
-            // Mark that we're sending a timeout response
-            responseStarted = true;
             // Try to abort any ongoing database queries
             if (req.abortController) {
                 req.abortController.abort();
             }
+            // Mark request as timed out
+            req.timedOut = true;
             try {
                 res.status(504).json({
                     error: "Request timeout - operation took too long",
@@ -801,8 +777,27 @@ app.use((req, res, next) => {
     res.on('finish', cleanup);
     res.on('close', cleanup);
     res.on('error', cleanup);
-    // Add abort controller to request for controllers to check
-    req.abortController = new AbortController();
+    // Also cleanup if headers are sent by other means
+    const originalSend = res.send;
+    const originalJson = res.json;
+    const originalEnd = res.end;
+    // Only wrap if not already wrapped by response-guard
+    if (!res.__timeoutWrapped) {
+        res.__timeoutWrapped = true;
+        res.send = function (body) {
+            cleanup();
+            return originalSend.call(this, body);
+        };
+        res.json = function (body) {
+            cleanup();
+            return originalJson.call(this, body);
+        };
+        res.end = function (...args) {
+            cleanup();
+            // Cast to any to avoid TypeScript overload issues
+            return originalEnd.apply(this, args);
+        };
+    }
     next();
 });
 // Delay participant reconciliation startup
