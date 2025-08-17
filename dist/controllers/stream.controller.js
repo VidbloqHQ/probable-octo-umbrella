@@ -856,20 +856,17 @@ export const getStream = async (req, res) => {
             return;
         }
         if (!tenant) {
-            res.status(401).json({ error: "Tenant authentication required." });
-            return; // CRITICAL: Return immediately after sending response
+            return res.status(401).json({ error: "Tenant authentication required." }); // CRITICAL: Return immediately after sending response
         }
         if (!streamId) {
-            res.status(400).json({ error: "Missing stream ID." });
-            return; // CRITICAL: Return immediately after sending response
+            return res.status(400).json({ error: "Missing stream ID." }); // CRITICAL: Return immediately after sending response
         }
         // Check cache first
         const cacheKey = `${tenant.id}:${streamId}:full`;
         const cached = streamCache.get(cacheKey);
         if (cached && Date.now() - cached.timestamp < STREAM_CACHE_TTL) {
             success = true;
-            res.status(200).json(cached.data);
-            return; // CRITICAL: Return immediately after sending response
+            return res.status(200).json(cached.data);
         }
         // Check before query
         if (res.headersSent || abortController?.signal?.aborted) {
@@ -919,8 +916,7 @@ export const getStream = async (req, res) => {
             return;
         }
         if (!stream) {
-            res.status(404).json({ error: "Stream not found." });
-            return; // CRITICAL: Return immediately after sending response
+            return res.status(404).json({ error: "Stream not found." }); // CRITICAL: Return immediately after sending response
         }
         // Cache the result
         streamCache.set(cacheKey, { data: stream, timestamp: Date.now() });
@@ -930,8 +926,7 @@ export const getStream = async (req, res) => {
             console.log(`[getStream] Response already sent before final send`);
             return;
         }
-        res.status(200).json(stream);
-        return; // CRITICAL: Return immediately after sending response
+        return res.status(200).json(stream); // CRITICAL: Return immediately after sending response
     }
     catch (error) {
         console.error("Error fetching stream:", error);
@@ -941,14 +936,12 @@ export const getStream = async (req, res) => {
             return;
         }
         if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-            res.status(504).json({
+            return res.status(504).json({
                 error: "Database query timeout",
                 message: "The request took too long. Please try again."
             });
-            return;
         }
-        res.status(500).json({ error: "Internal server error" });
-        return;
+        return res.status(500).json({ error: "Internal server error" });
     }
     finally {
         trackQuery(success);

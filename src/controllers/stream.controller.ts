@@ -1057,13 +1057,11 @@ export const getStream = async (req: TenantRequest, res: Response) => {
     }
 
     if (!tenant) {
-      res.status(401).json({ error: "Tenant authentication required." });
-      return; // CRITICAL: Return immediately after sending response
+      return res.status(401).json({ error: "Tenant authentication required." });  // CRITICAL: Return immediately after sending response
     }
 
     if (!streamId) {
-      res.status(400).json({ error: "Missing stream ID." });
-      return; // CRITICAL: Return immediately after sending response
+      return res.status(400).json({ error: "Missing stream ID." });  // CRITICAL: Return immediately after sending response
     }
 
     // Check cache first
@@ -1072,8 +1070,7 @@ export const getStream = async (req: TenantRequest, res: Response) => {
     
     if (cached && Date.now() - cached.timestamp < STREAM_CACHE_TTL) {
       success = true;
-      res.status(200).json(cached.data);
-      return; // CRITICAL: Return immediately after sending response
+      return res.status(200).json(cached.data);
     }
 
     // Check before query
@@ -1129,8 +1126,7 @@ export const getStream = async (req: TenantRequest, res: Response) => {
     }
 
     if (!stream) {
-      res.status(404).json({ error: "Stream not found." });
-      return; // CRITICAL: Return immediately after sending response
+      return res.status(404).json({ error: "Stream not found." });  // CRITICAL: Return immediately after sending response
     }
 
     // Cache the result
@@ -1144,8 +1140,7 @@ export const getStream = async (req: TenantRequest, res: Response) => {
       return;
     }
     
-    res.status(200).json(stream);
-    return; // CRITICAL: Return immediately after sending response
+    return res.status(200).json(stream); // CRITICAL: Return immediately after sending response
     
   } catch (error: any) {
     console.error("Error fetching stream:", error);
@@ -1157,15 +1152,13 @@ export const getStream = async (req: TenantRequest, res: Response) => {
     }
     
     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-      res.status(504).json({ 
+      return res.status(504).json({
         error: "Database query timeout",
         message: "The request took too long. Please try again."
       });
-      return;
     }
     
-    res.status(500).json({ error: "Internal server error" });
-    return;
+    return res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
   }

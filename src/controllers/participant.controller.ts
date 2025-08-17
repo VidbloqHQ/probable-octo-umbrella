@@ -762,13 +762,11 @@ export const getStreamParticipants = async (
     }
 
     if (!tenant) {
-      res.status(401).json({ error: "Tenant authentication required." });
-      return; // CRITICAL: Return immediately after sending response
+      return res.status(401).json({ error: "Tenant authentication required." });  // CRITICAL: Return immediately after sending response
     }
 
     if (!streamId) {
-      res.status(400).json({ error: "Missing required field: streamId" });
-      return; // CRITICAL: Return immediately after sending response
+      return res.status(400).json({ error: "Missing required field: streamId" });  // CRITICAL: Return immediately after sending response
     }
 
     // Check cache first
@@ -777,8 +775,7 @@ export const getStreamParticipants = async (
     
     if (cached && Date.now() - cached.timestamp < PARTICIPANT_CACHE_TTL) {
       success = true;
-      res.status(200).json({ participants: cached.data });
-      return; // CRITICAL: Return immediately after sending response
+      return res.status(200).json({ participants: cached.data });  // CRITICAL: Return immediately after sending response
     }
 
     // Before making the query, check again
@@ -824,10 +821,9 @@ export const getStreamParticipants = async (
     }
 
     if (!stream) {
-      res.status(404).json({
+      return res.status(404).json({
         error: `Stream with name ${streamId} not found`,
-      });
-      return; // CRITICAL: Return immediately after sending response
+      });  // CRITICAL: Return immediately after sending response
     }
 
     // Cache the results
@@ -844,8 +840,7 @@ export const getStreamParticipants = async (
       return;
     }
     
-    res.status(200).json({ participants: stream.participants });
-    return; // CRITICAL: Return immediately after sending response
+    return res.status(200).json({ participants: stream.participants });
     
   } catch (error: any) {
     console.error("Error fetching stream participants:", error);
@@ -863,15 +858,13 @@ export const getStreamParticipants = async (
     }
     
     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-      res.status(504).json({ 
+      return res.status(504).json({ 
         error: "Database query timeout",
         message: "The request took too long. Please try again."
       });
-      return;
     }
     
-    res.status(500).json({ error: "Internal server error" });
-    return;
+    return res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
   }
