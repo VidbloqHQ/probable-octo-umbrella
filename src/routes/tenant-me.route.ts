@@ -8,15 +8,16 @@ import {
   removeAuthorizedDomain
 } from "../controllers/tenant-me.controller.js";
 import { safeController } from "../middlewares/request-lock.middleware.js";
+import { singletonController } from "../utils/singleton-controller.js";
 
 const router = express.Router();
 
-router.put("/", safeController(updateTenant));
-router.get("/info", safeController(getTenantInfo));
+router.put("/", safeController(singletonController('updateTenant', updateTenant)));
+router.get("/info", safeController(singletonController('getTenantInfo', getTenantInfo)));
 
-router.get("/authorized-domains", safeController(getAuthorizedDomains));
-router.post("/authorized-domains", safeController(addAuthorizedDomain));
-router.delete("/authorized-domains/:domainId", safeController(removeAuthorizedDomain));
-router.post("/authorized-domains/bulk", safeController(bulkAddAuthorizedDomains));
+router.get("/authorized-domains", safeController(singletonController('getAuthorizedDomains', getAuthorizedDomains)));
+router.post("/authorized-domains", safeController(singletonController('addAuthorizedDomain', addAuthorizedDomain)));
+router.delete("/authorized-domains/:domainId", safeController(singletonController('removeAuthorizedDomain', removeAuthorizedDomain)));
+router.post("/authorized-domains/bulk", safeController(singletonController('bulkAddAuthorizedDomains', bulkAddAuthorizedDomains)));
 
 export default router;

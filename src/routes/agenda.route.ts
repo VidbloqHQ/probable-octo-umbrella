@@ -1,5 +1,6 @@
 import express from "express";
 import { safeController } from "../middlewares/request-lock.middleware.js";
+import { singletonController } from "../utils/singleton-controller.js";
 import {
   createAgenda,
   getStreamAgenda,
@@ -16,10 +17,10 @@ const router = express.Router();
 // router.get("/:agendaId", getAgenda);
 // router.delete("/:agendaId/:wallet", deleteAgenda);
 
-router.post("/:streamId", safeController(createAgenda));
-router.get("/stream/:streamId", safeController(getStreamAgenda));
-router.put("/:agendaId", safeController(updateStreamAgenda));
-router.get("/:agendaId", safeController(getAgenda));
-router.delete("/:agendaId/:wallet", safeController(deleteAgenda));
+router.post("/:streamId", safeController(singletonController('createAgenda', createAgenda)));
+router.get("/stream/:streamId", safeController(singletonController('getStreamAgenda', getStreamAgenda)));
+router.put("/:agendaId", safeController(singletonController('updateStreamAgenda', updateStreamAgenda)));
+router.get("/:agendaId", safeController(singletonController('getAgenda', getAgenda)));
+router.delete("/:agendaId/:wallet", safeController(singletonController('deleteAgenda', deleteAgenda)));
 
 export default router;

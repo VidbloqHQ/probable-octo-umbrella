@@ -154,13 +154,29 @@ const TENANT_INFO_CACHE_TTL = 300000; // 5 minutes
  * Fixed getTenantInfo controller - simplified and optimized
  */
 export const getTenantInfo = async (req: TenantRequest, res: Response) => {
+
+    // ADD THIS DEBUG TRACKING
+  const executionId = Math.random().toString(36).substring(7);
+  const startTime = Date.now();
+  console.log(`[getTenantInfo] STARTED execution ${executionId} for request ${(req as any).id} at ${startTime}`);
+  
+  // Track if already executed
+  if ((req as any).getTenantInfoExecuted) {
+    console.error(`[getTenantInfo] ALREADY EXECUTED! Previous: ${(req as any).getTenantInfoExecuted}, Current: ${executionId}`);
+    return; // Prevent double execution
+  }
+  (req as any).getTenantInfoExecuted = executionId;
   let success = false;
   
   try {
     // Simple guard - let middleware handle the rest
+    console.log(`[getTenantInfo] Step 1: Checking headers at ${Date.now() - startTime}ms`);
+
     if (res.headersSent) return;
     
     // Check abort signal
+    console.log(`[getTenantInfo] Step 2: Checking abort at ${Date.now() - startTime}ms`);
+
     if ((req as any).abortController?.signal?.aborted) {
       console.log('[getTenantInfo] Request aborted');
       return;

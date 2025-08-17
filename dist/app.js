@@ -503,7 +503,7 @@ import { createServer } from "http";
 import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 import { requestLockMiddleware, timeoutMiddleware } from "./middlewares/request-lock.middleware.js";
-import { routeDebugMiddleware } from "./middlewares/route-debug.middleware.js";
+import { routeDebugMiddleware, logAllRoutes } from "./middlewares/route-debug.middleware.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
 import { isDatabaseHealthy, getDatabaseMetrics, db, executeQuery } from "./prisma.js";
@@ -665,6 +665,11 @@ app.use((req, res, next) => {
 // ============================================
 app.use(requestLockMiddleware);
 // ============================================
+// ROUTE DEBUG MIDDLEWARE - TEMPORARY FOR DEBUGGING
+// Add this RIGHT AFTER request lock
+// ============================================
+app.use(routeDebugMiddleware);
+// ============================================
 // IMPROVED TIMEOUT MIDDLEWARE
 // Now works properly with request lock
 // ============================================
@@ -824,7 +829,7 @@ setTimeout(() => {
 // ============================================
 // PUBLIC ROUTES (NO AUTH REQUIRED)
 // ============================================
-app.use(routeDebugMiddleware);
+//  app.use(routeDebugMiddleware);
 app.use("/tenant", TenantRouter.default);
 // ============================================
 // PROTECTED ROUTES (AUTH REQUIRED)
@@ -839,6 +844,11 @@ app.use("/poll", PollRouter.default);
 app.use("/participant", ParticipantRouter.default);
 app.use("/quiz", QuizRouter.default);
 app.use("/program", ProgramRouter.default);
+// ============================================
+// LOG ALL ROUTES - Add this AFTER all routes are registered
+// ============================================
+console.log('App initialization complete. Logging routes...');
+logAllRoutes(app);
 // ============================================
 // 404 HANDLER
 // ============================================
