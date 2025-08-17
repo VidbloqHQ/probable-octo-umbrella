@@ -502,7 +502,7 @@ import express from "express";
 import { createServer } from "http";
 import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
-import { requestLockMiddleware } from "./middlewares/request-lock.middleware.js";
+import { requestLockMiddleware, timeoutMiddleware } from "./middlewares/request-lock.middleware.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
 import { isDatabaseHealthy, getDatabaseMetrics, db, executeQuery } from "./prisma.js";
@@ -664,6 +664,11 @@ app.use((req, res, next) => {
 // ============================================
 app.use(requestLockMiddleware);
 // ============================================
+// IMPROVED TIMEOUT MIDDLEWARE
+// Now works properly with request lock
+// ============================================
+app.use(timeoutMiddleware(MAX_REQUEST_TIMEOUT));
+// ============================================
 // REQUEST LOGGING (OPTIONAL)
 // ============================================
 if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_REQUEST_LOGGING === 'true') {
@@ -686,54 +691,53 @@ if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_REQUEST_LOGGING 
 // ============================================
 // REQUEST TIMEOUT MIDDLEWARE
 // ============================================
-app.use((req, res, next) => {
-    // Skip timeout for specific endpoints
-    if (['/health', '/ready', '/monitor/db-health'].includes(req.path)) {
-        return next();
-    }
-    let timeoutHandle = null;
-    let cleaned = false;
-    const cleanup = () => {
-        if (!cleaned) {
-            cleaned = true;
-            if (timeoutHandle) {
-                clearTimeout(timeoutHandle);
-                timeoutHandle = null;
-            }
-        }
-    };
-    // Add abort controller to request for controllers to check
-    req.abortController = new AbortController();
-    // Set up timeout handler
-    timeoutHandle = setTimeout(() => {
-        if (!res.headersSent && !cleaned) {
-            console.error(`[TIMEOUT] Request timeout after ${MAX_REQUEST_TIMEOUT}ms: ${req.method} ${req.path}`);
-            // Try to abort any ongoing database queries
-            if (req.abortController) {
-                req.abortController.abort();
-            }
-            // Mark request as timed out
-            req.timedOut = true;
-            try {
-                res.status(504).json({
-                    error: "Request timeout - operation took too long",
-                    code: "REQUEST_TIMEOUT",
-                    timeout: MAX_REQUEST_TIMEOUT,
-                    path: req.path
-                });
-            }
-            catch (err) {
-                console.error('[TIMEOUT] Failed to send timeout response:', err);
-            }
-            cleanup();
-        }
-    }, MAX_REQUEST_TIMEOUT);
-    // Clear timeout when response is complete
-    res.on('finish', cleanup);
-    res.on('close', cleanup);
-    res.on('error', cleanup);
-    next();
-});
+// app.use((req: Request, res: Response, next) => {
+//   // Skip timeout for specific endpoints
+//   if (['/health', '/ready', '/monitor/db-health'].includes(req.path)) {
+//     return next();
+//   }
+//   let timeoutHandle: NodeJS.Timeout | null = null;
+//   let cleaned = false;
+//   const cleanup = () => {
+//     if (!cleaned) {
+//       cleaned = true;
+//       if (timeoutHandle) {
+//         clearTimeout(timeoutHandle);
+//         timeoutHandle = null;
+//       }
+//     }
+//   };
+//   // Add abort controller to request for controllers to check
+//   (req as any).abortController = new AbortController();
+//   // Set up timeout handler
+//   timeoutHandle = setTimeout(() => {
+//     if (!res.headersSent && !cleaned) {
+//       console.error(`[TIMEOUT] Request timeout after ${MAX_REQUEST_TIMEOUT}ms: ${req.method} ${req.path}`);
+//       // Try to abort any ongoing database queries
+//       if ((req as any).abortController) {
+//         (req as any).abortController.abort();
+//       }
+//       // Mark request as timed out
+//       (req as any).timedOut = true;
+//       try {
+//         res.status(504).json({ 
+//           error: "Request timeout - operation took too long",
+//           code: "REQUEST_TIMEOUT",
+//           timeout: MAX_REQUEST_TIMEOUT,
+//           path: req.path
+//         });
+//       } catch (err) {
+//         console.error('[TIMEOUT] Failed to send timeout response:', err);
+//       }
+//       cleanup();
+//     }
+//   }, MAX_REQUEST_TIMEOUT);
+//   // Clear timeout when response is complete
+//   res.on('finish', cleanup);
+//   res.on('close', cleanup);
+//   res.on('error', cleanup);
+//   next();
+// });
 // ============================================
 // BEACON HANDLER
 // ============================================
