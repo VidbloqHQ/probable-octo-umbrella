@@ -1,16 +1,3 @@
-// // participant.controller.ts - FULLY FIXED VERSION
-// import { Response } from "express";
-// import { AccessToken } from "livekit-server-sdk";
-// import WebSocket from "ws";
-// import { db, executeQuery, trackQuery } from "../prisma.js";
-// import {
-//   isValidWalletAddress,
-//   roomService,
-// } from "../utils/index.js";
-// import { TenantRequest } from "../types/index.js";
-// import { clientsByRoom, clientsByIdentity } from "../websocket.js";
-// import { ParticipantManager } from "../services/participantManager.js";
-// import { wss } from "../app.js";
 import { AccessToken } from "livekit-server-sdk";
 import WebSocket from "ws";
 import { db, executeQuery, trackQuery } from "../prisma.js";
@@ -286,7 +273,7 @@ export const updateParticipantPermissions = async (req, res) => {
             success = true;
             // Check abort before response
             if (!res.headersSent && !abortController?.signal?.aborted) {
-                res.status(200).json({
+                return res.status(200).json({
                     message,
                     token,
                     participantId,
@@ -299,7 +286,7 @@ export const updateParticipantPermissions = async (req, res) => {
             // Still return success since DB update worked
             success = true;
             if (!res.headersSent && !abortController?.signal?.aborted) {
-                res.status(200).json({
+                return res.status(200).json({
                     message: "Participant updated but LiveKit sync failed",
                     participantId,
                     newRole: newRole,
@@ -321,7 +308,7 @@ export const updateParticipantPermissions = async (req, res) => {
         if (error.message?.includes("not found") || error.message?.includes("not a")) {
             return res.status(400).json({ error: error.message });
         }
-        res.status(500).json({ error: "Internal server error" });
+        return res.status(500).json({ error: "Internal server error" });
     }
     finally {
         trackQuery(success);
@@ -400,7 +387,7 @@ export const getParticipantScores = async (req, res) => {
         });
         success = true;
         if (!res.headersSent && !abortController?.signal?.aborted) {
-            res.status(200).json({
+            return res.status(200).json({
                 stream: {
                     id: stream.id,
                     name: stream.name,
@@ -419,7 +406,7 @@ export const getParticipantScores = async (req, res) => {
                 message: "The request took too long. Please try again."
             });
         }
-        res.status(500).json({ error: "Internal server error" });
+        return res.status(500).json({ error: "Internal server error" });
     }
     finally {
         trackQuery(success);
@@ -513,7 +500,7 @@ export const updateParticipantLeftTime = async (req, res) => {
                 message: "The operation took too long. Please try again."
             });
         }
-        res.status(500).json({ error: "Internal server error" });
+        return res.status(500).json({ error: "Internal server error" });
     }
     finally {
         trackQuery(success);
@@ -552,7 +539,7 @@ export const handleWebSocketDisconnect = async (req, res) => {
         participantCache.delete(`${tenant.id}:${streamId}:participants`);
         success = true;
         if (!res.headersSent && !abortController?.signal?.aborted) {
-            res.status(200).json({ message: "Participant disconnect handled successfully" });
+            return res.status(200).json({ message: "Participant disconnect handled successfully" });
         }
     }
     catch (error) {
@@ -565,7 +552,7 @@ export const handleWebSocketDisconnect = async (req, res) => {
                 message: "The operation took too long. Please try again."
             });
         }
-        res.status(500).json({ error: "Internal server error" });
+        return res.status(500).json({ error: "Internal server error" });
     }
     finally {
         trackQuery(success);

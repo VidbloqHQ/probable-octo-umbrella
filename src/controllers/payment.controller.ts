@@ -217,13 +217,13 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
     console.log("Transaction created successfully");
     
     success = true;
-    res.status(200).json({
+    return res.status(200).json({
       transaction: serializedTransaction.toString("base64"),
       tenantId: tenant.id,
     });
   } catch (error) {
     console.error("Error creating transaction:", error);
-    res.status(500).json({ error: "Failed to create transaction" });
+    return res.status(500).json({ error: "Failed to create transaction" });
   } finally {
     trackQuery(success);
   }
@@ -537,7 +537,7 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
     }
 
     success = true;
-    res.json({
+    return res.json({
       data: "Payment successful",
       signature: result.signature,
       points: result.points,
@@ -553,8 +553,8 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
         logs: error.logs || []
       });
     }
-    
-    res.status(500).json({ error: "Failed to submit transaction" });
+
+    return res.status(500).json({ error: "Failed to submit transaction" });
   } finally {
     trackQuery(success);
   }

@@ -81,14 +81,14 @@ export const createUser = async (req, res) => {
         userCache.set(cacheKey, { data: user, timestamp: Date.now() });
         success = true;
         if (!res.headersSent && !abortController?.signal?.aborted) {
-            res.status(201).json({ data: user, created: true });
+            return res.status(201).json({ data: user, created: true });
         }
     }
     catch (error) {
         console.error("Error creating user:", error);
         if (res.headersSent)
             return;
-        res.status(500).json({ error: "An unexpected error occurred." });
+        return res.status(500).json({ error: "An unexpected error occurred." });
     }
     finally {
         trackQuery(success);
@@ -149,7 +149,7 @@ export const getUser = async (req, res) => {
         console.error("Error getting user:", error);
         if (res.headersSent)
             return;
-        res.status(500).json({ error: "An unexpected error occurred." });
+        return res.status(500).json({ error: "An unexpected error occurred." });
     }
     finally {
         trackQuery(success);
@@ -201,14 +201,14 @@ export const updateUser = async (req, res) => {
         userCache.delete(cacheKey);
         success = true;
         if (!res.headersSent && !abortController?.signal?.aborted) {
-            res.status(200).json({ data: user });
+            return res.status(200).json({ data: user });
         }
     }
     catch (error) {
         console.error("Error updating user:", error);
         if (res.headersSent)
             return;
-        res.status(500).json({ error: "An unexpected error occurred." });
+        return res.status(500).json({ error: "An unexpected error occurred." });
     }
     finally {
         trackQuery(success);
@@ -258,7 +258,7 @@ export const listUsers = async (req, res) => {
         }
         success = true;
         if (!res.headersSent && !abortController?.signal?.aborted) {
-            res.status(200).json({
+            return res.status(200).json({
                 data: users,
                 pagination: {
                     total: totalUsers,
@@ -273,7 +273,7 @@ export const listUsers = async (req, res) => {
         console.error("Error listing users:", error);
         if (res.headersSent)
             return;
-        res.status(500).json({ error: "An unexpected error occurred." });
+        return res.status(500).json({ error: "An unexpected error occurred." });
     }
     finally {
         trackQuery(success);
@@ -322,14 +322,14 @@ export const deleteUser = async (req, res) => {
         userCache.delete(cacheKey);
         success = true;
         if (!res.headersSent && !abortController?.signal?.aborted) {
-            res.status(200).json({ success: true, message: "User deleted successfully" });
+            return res.status(200).json({ success: true, message: "User deleted successfully" });
         }
     }
     catch (error) {
         console.error("Error deleting user:", error);
         if (res.headersSent)
             return;
-        res.status(500).json({ error: "An unexpected error occurred." });
+        return res.status(500).json({ error: "An unexpected error occurred." });
     }
     finally {
         trackQuery(success);

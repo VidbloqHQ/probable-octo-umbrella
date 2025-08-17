@@ -9,7 +9,6 @@ const authCache = new Map<string, { data: any; timestamp: number }>();
 const AUTH_CACHE_TTL = 30000; // 30 seconds
 
 // Helper to get cached or fetch authorization data
-
 async function getAuthorizationData(
   streamId: string,
   wallet: string,
@@ -337,7 +336,7 @@ export const createAgenda = async (req: TenantRequest, res: Response) => {
 
     // Complete success
     success = true;
-    res.status(201).json(createdAgendas);
+    return res.status(201).json(createdAgendas);
 
   } catch (error: any) {
     console.error("Error creating agenda:", error);
@@ -349,149 +348,13 @@ export const createAgenda = async (req: TenantRequest, res: Response) => {
       });
     }
     
-    res.status(500).json({ 
+    return res.status(500).json({ 
       error: "Internal server error"
     });
   } finally {
     trackQuery(success);
   }
 };
-
-/**
- * Controller for getting all stream's agendas - FIXED WITH RESPONSE GUARDS
- */
-// export const getStreamAgenda = async (
-//   req: TenantRequest,
-//   res: Response
-// ) => {
-//   const { streamId } = req.params;
-//   const tenant = req.tenant;
-//   let success = false;
-
-//   try {
-//     // CRITICAL: Check if response already sent at the very beginning
-//     if (res.headersSent) {
-//       console.log(`[getStreamAgenda] Response already sent for ${streamId}`);
-//       return;
-//     }
-
-//     // Check if request was aborted
-//     const abortController = (req as any).abortController;
-//     if (abortController?.signal?.aborted) {
-//       console.log(`[getStreamAgenda] Request already aborted for ${streamId}`);
-//       return;
-//     }
-
-//     if (!tenant) {
-//       if (!res.headersSent) {
-//         res.status(401).json({ error: "Tenant authentication required." });
-//       }
-//       return; // CRITICAL: Return immediately after sending response
-//     }
-
-//     if (!streamId) {
-//       if (!res.headersSent) {
-//         res.status(400).json({ error: "Missing livestream ID" });
-//       }
-//       return; // CRITICAL: Return immediately after sending response
-//     }
-
-//     // Check again before query
-//     if (res.headersSent || abortController?.signal?.aborted) {
-//       return;
-//     }
-
-//     // Get stream and its agendas with timeout and limits
-//     const stream = await executeQuery(
-//       () => db.stream.findFirst({
-//         where: {
-//           name: streamId,
-//           tenantId: tenant.id,
-//         },
-//         include: {
-//           agenda: {
-//             include: {
-//               pollContent: true,
-//               quizContent: {
-//                 include: { 
-//                   questions: {
-//                     take: 10 // Limit questions per quiz
-//                   } 
-//                 }
-//               },
-//               qaContent: true,
-//               customContent: true,
-//               participantResponses: {
-//                 select: {
-//                   id: true,
-//                   responseType: true,
-//                   timestamp: true,
-//                   participantId: true
-//                 },
-//                 take: 50 // Limit responses
-//               }
-//             },
-//             orderBy: {
-//               timeStamp: 'asc'
-//             },
-//             take: 50 // Limit agendas
-//           }
-//         }
-//       }),
-//       { maxRetries: 1, timeout: 5000 }
-//     );
-
-//     // Check again after query
-//     if (res.headersSent || abortController?.signal?.aborted) {
-//       console.log(`[getStreamAgenda] Response sent/aborted after query for ${streamId}`);
-//       return;
-//     }
-
-//     if (!stream) {
-//       if (!res.headersSent) {
-//         res.status(404).json({ error: "Stream not found in your tenant" });
-//       }
-//       return; // CRITICAL: Return immediately after sending response
-//     }
-
-//     success = true;
-    
-//     // Final check before sending response
-//     if (!res.headersSent && !abortController?.signal?.aborted) {
-//       res.status(200).json(stream.agenda);
-//     }
-//     return; // CRITICAL: Return after sending response
-    
-//   } catch (error: any) {
-//     console.error("Error fetching agendas:", error);
-    
-//     // Check before sending error response
-//     if (res.headersSent) {
-//       console.log(`[getStreamAgenda] Error after response sent`);
-//       return;
-//     }
-    
-//     const abortController = (req as any).abortController;
-//     if (abortController?.signal?.aborted) {
-//       console.log(`[getStreamAgenda] Error after abort`);
-//       return;
-//     }
-    
-//     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-//       res.status(504).json({ 
-//         error: "Database query timeout",
-//         message: "The request took too long. Please try again."
-//       });
-//       return;
-//     }
-    
-//     res.status(500).json({ error: "Internal server error" });
-//     return;
-//   } finally {
-//     trackQuery(success);
-//   }
-// };
-
 
 /**
  * Controller for getting all stream's agendas - ULTRA SAFE VERSION
@@ -529,7 +392,7 @@ export const getStreamAgenda = async (
     if (!tenant) {
       // Only send if not already sent
       if (!res.headersSent && (!lock || !lock.completed)) {
-        res.status(401).json({ error: "Tenant authentication required." });
+        return res.status(401).json({ error: "Tenant authentication required." });
       }
       return;
     }
@@ -537,7 +400,7 @@ export const getStreamAgenda = async (
     if (!streamId) {
       // Only send if not already sent
       if (!res.headersSent && (!lock || !lock.completed)) {
-        res.status(400).json({ error: "Missing livestream ID" });
+        return res.status(400).json({ error: "Missing livestream ID" });
       }
       return;
     }
@@ -597,7 +460,7 @@ export const getStreamAgenda = async (
     if (!stream) {
       // Only send if not already sent
       if (!res.headersSent && (!lock || !lock.completed)) {
-        res.status(404).json({ error: "Stream not found in your tenant" });
+        return res.status(404).json({ error: "Stream not found in your tenant" });
       }
       return;
     }
@@ -612,7 +475,7 @@ export const getStreamAgenda = async (
       }
       
       // Send response
-      res.status(200).json(stream.agenda);
+      return res.status(200).json(stream.agenda);
     } else {
       console.log(`[getStreamAgenda] Response already sent or locked, skipping final send`);
     }
@@ -637,14 +500,14 @@ export const getStreamAgenda = async (
     // Send error only if not sent
     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
       if (!res.headersSent && (!lock || !lock.completed)) {
-        res.status(504).json({ 
+        return res.status(504).json({ 
           error: "Database query timeout",
           message: "The request took too long. Please try again."
         });
       }
     } else {
       if (!res.headersSent && (!lock || !lock.completed)) {
-        res.status(500).json({ error: "Internal server error" });
+        return res.status(500).json({ error: "Internal server error" });
       }
     }
     
@@ -973,7 +836,7 @@ export const updateStreamAgenda = async (
       }
     });
 
-    res.status(200).json(updatedAgenda);
+    return res.status(200).json(updatedAgenda);
   } catch (error) {
     console.error("Error updating agenda:", error);
     
@@ -983,8 +846,7 @@ export const updateStreamAgenda = async (
         error: error.message 
       });
     }
-    
-    res.status(500).json({ 
+    return res.status(500).json({ 
       error: "Internal server error",
     });
   }
@@ -1086,7 +948,7 @@ export const deleteAgenda = async (req: TenantRequest, res: Response) => {
     );
 
     success = true;
-    res.status(200).json({
+    return res.status(200).json({
       message: "Agenda deleted successfully",
       deletedId: agendaId,
       livestreamId: existingAgenda.stream.name
@@ -1100,8 +962,7 @@ export const deleteAgenda = async (req: TenantRequest, res: Response) => {
         message: "The operation took too long. Please try again."
       });
     }
-    
-    res.status(500).json({ 
+    return res.status(500).json({ 
       error: "Internal server error",
     });
   } finally {
@@ -1167,10 +1028,10 @@ export const getAgenda = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    res.status(200).json(agenda);
+    return res.status(200).json(agenda);
   } catch (error) {
     console.error("Error fetching agenda:", error);
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   }
 };
 

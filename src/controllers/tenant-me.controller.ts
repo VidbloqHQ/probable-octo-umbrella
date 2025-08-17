@@ -8,149 +8,6 @@ const tenantInfoCache = new Map<string, { data: any; timestamp: number }>();
 const TENANT_INFO_CACHE_TTL = 300000; // 5 minutes
 
 /**
- * Controller for getting all tenant information - FIXED WITH SINGLE RESPONSE
- */
-// export const getTenantInfo = async (req: TenantRequest, res: Response) => {
-//   // Guard: Check if response already sent at the very beginning
-//   if (res.headersSent) {
-//     console.log(`[getTenantInfo] Response already sent at start`);
-//     return;
-//   }
-  
-//   let success = false;
-  
-//   try {
-//     const abortController = (req as any).abortController;
-//     if (abortController?.signal?.aborted) {
-//       console.log(`[getTenantInfo] Request already aborted at start`);
-//       return;
-//     }
-
-//     // Ensure tenant is authenticated via middleware
-//     if (!req.tenant || !req.tenant.id) {
-//       res.status(401).json({ error: "Authenticated tenant required" });
-//       return; // CRITICAL: Return immediately after sending response
-//     }
-    
-//     const tenantId = req.tenant.id;
-
-//     // Check cache first
-//     const cached = tenantInfoCache.get(tenantId);
-//     if (cached && Date.now() - cached.timestamp < TENANT_INFO_CACHE_TTL) {
-//       success = true;
-//       res.status(200).json(cached.data);
-//       return; // CRITICAL: Return immediately after sending response
-//     }
-
-//     // Check before query
-//     if (res.headersSent || abortController?.signal?.aborted) {
-//       console.log(`[getTenantInfo] Aborted before query`);
-//       return;
-//     }
-
-//     // Fetch tenant with all related info - WITH REDUCED TIMEOUT
-//     const tenant = await executeQuery(
-//       () => db.tenant.findUnique({
-//         where: { id: tenantId },
-//         include: {
-//           authorizedDomains: {
-//             select: { domain: true },
-//             take: 100 // Limit domains
-//           },
-//           enabledStreamTypes: true,
-//         },
-//       }),
-//       { maxRetries: 1, timeout: 2000 } // Reduced from 3000
-//     );
-
-//     // Check after query
-//     if (res.headersSent || abortController?.signal?.aborted) {
-//       console.log(`[getTenantInfo] Response sent/aborted after query`);
-//       return;
-//     }
-
-//     if (!tenant) {
-//       res.status(404).json({ error: "Tenant not found" });
-//       return; // CRITICAL: Return immediately after sending response
-//     }
-
-//     // Format the response
-//     const response = {
-//       tenant: {
-//         id: tenant.id,
-//         name: tenant.name,
-//         theme: tenant.theme,
-//         primaryColor: tenant.primaryColor,
-//         secondaryColor: tenant.secondaryColor,
-//         accentColor: tenant.accentColor,
-//         textPrimaryColor: tenant.textPrimaryColor,
-//         textSecondaryColor: tenant.textSecondaryColor,
-//         logo: tenant.logo,
-//         shortLogo: tenant.shortLogo,
-//         templateId: tenant.templateId,
-//         rpcEndpoint: tenant.rpcEndpoint,
-//         networkCluster: tenant.networkCluster,
-//         creatorWallet: tenant.creatorWallet,
-//         createdAt: tenant.createdAt,
-//         updatedAt: tenant.updatedAt,
-//         defaultStreamType: tenant.defaultStreamType,
-//         defaultFundingType: tenant.defaultFundingType,
-//         enabledStreamTypes: tenant.enabledStreamTypes || {
-//           enableStream: true,
-//           enableMeeting: true,
-//           enablePodcast: false,
-//         },
-//         authorizedDomains: tenant.authorizedDomains.map((d) => d.domain),
-//       },
-//     };
-
-//     // Cache the response
-//     tenantInfoCache.set(tenantId, { data: response, timestamp: Date.now() });
-
-//     success = true;
-    
-//     // Final check before sending
-//     if (res.headersSent) {
-//       console.log(`[getTenantInfo] Response already sent before final send`);
-//       return;
-//     }
-    
-//     res.status(200).json(response);
-//     return; // CRITICAL: Return immediately after sending response
-    
-//   } catch (error: any) {
-//     console.error("Error fetching tenant:", error);
-    
-//     // Check before sending error response
-//     if (res.headersSent) {
-//       console.log(`[getTenantInfo] Error after response sent`);
-//       return;
-//     }
-    
-//     const abortController = (req as any).abortController;
-//     if (abortController?.signal?.aborted) {
-//       console.log(`[getTenantInfo] Error after abort`);
-//       return;
-//     }
-    
-//     // Handle timeout specifically
-//     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-//       res.status(504).json({ 
-//         error: "Database query timeout",
-//         message: "The request took too long. Please try again."
-//       });
-//       return;
-//     }
-    
-//     res.status(500).json({ error: "Failed to fetch tenant information" });
-//     return;
-//   } finally {
-//     trackQuery(success);
-//   }
-// };
-
-
-/**
  * Fixed getTenantInfo controller - simplified and optimized
  */
 export const getTenantInfo = async (req: TenantRequest, res: Response) => {
@@ -629,7 +486,7 @@ export const getAuthorizedDomains = async (req: TenantRequest, res: Response) =>
     success = true;
     
     if (!res.headersSent && !abortController?.signal?.aborted) {
-      res.status(200).json({
+      return res.status(200).json({
         domains,
         count: domains.length
       });
@@ -646,7 +503,7 @@ export const getAuthorizedDomains = async (req: TenantRequest, res: Response) =>
       });
     }
     
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
   }
@@ -730,7 +587,7 @@ export const addAuthorizedDomain = async (req: TenantRequest, res: Response) => 
     success = true;
     
     if (!res.headersSent && !abortController?.signal?.aborted) {
-      res.status(201).json({
+      return res.status(201).json({
         message: "Domain authorized successfully",
         domain: authorizedDomain
       });
@@ -739,8 +596,8 @@ export const addAuthorizedDomain = async (req: TenantRequest, res: Response) => 
     console.error("Error adding authorized domain:", error);
     
     if (res.headersSent) return;
-    
-    res.status(500).json({ error: "Internal server error" });
+
+    return res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
   }
@@ -795,7 +652,7 @@ export const removeAuthorizedDomain = async (req: TenantRequest, res: Response) 
     success = true;
     
     if (!res.headersSent && !abortController?.signal?.aborted) {
-      res.status(200).json({
+      return res.status(200).json({
         message: "Domain removed successfully",
         domain: domain.domain
       });
@@ -805,7 +662,7 @@ export const removeAuthorizedDomain = async (req: TenantRequest, res: Response) 
     
     if (res.headersSent) return;
     
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
   }
@@ -892,7 +749,7 @@ export const bulkAddAuthorizedDomains = async (req: TenantRequest, res: Response
     success = true;
     
     if (!res.headersSent && !abortController?.signal?.aborted) {
-      res.status(200).json({
+      return res.status(200).json({
         message: "Bulk domain authorization completed",
         results
       });
@@ -901,8 +758,8 @@ export const bulkAddAuthorizedDomains = async (req: TenantRequest, res: Response
     console.error("Error in bulk domain authorization:", error);
     
     if (res.headersSent) return;
-    
-    res.status(500).json({ error: "Internal server error" });
+
+    return res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
   }
