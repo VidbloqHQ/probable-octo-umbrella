@@ -16,9 +16,9 @@ const router = express.Router();
 router.post("/", safeController(createStream));
 router.post("/token", safeController(createStreamToken));
 router.get("/:streamId", safeController(getStream));
+router.put("/:streamId", safeController(updateStream));
 router.post("/record", safeController(recordStream));
 router.post("/record/stop", safeController(stopStreamRecord));
-router.put("/:streamId", safeController(updateStream));
 router.post("/youtube", safeController(streamToYoutube));
 router.post("/youtube/stop", safeController(stopYoutubeStream));
 

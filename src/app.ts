@@ -588,6 +588,7 @@ import {
 } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 import { requestLockMiddleware, timeoutMiddleware } from "./middlewares/request-lock.middleware.js";
+import { routeDebugMiddleware } from "./middlewares/route-debug.middleware.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
 import { isDatabaseHealthy, getDatabaseMetrics, db, executeQuery } from "./prisma.js";
@@ -951,6 +952,7 @@ setTimeout(() => {
 // ============================================
 // PUBLIC ROUTES (NO AUTH REQUIRED)
 // ============================================
+ app.use(routeDebugMiddleware);
 app.use("/tenant", TenantRouter.default);
 
 // ============================================
