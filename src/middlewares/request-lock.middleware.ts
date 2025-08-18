@@ -1,114 +1,4 @@
-// middlewares/request-lock.middleware.ts
-
 import { Request, Response, NextFunction } from "express";
-
-/**
- * Middleware to prevent duplicate request processing
- * This ensures each request is only processed once even if handlers are called multiple times
- */
-export function requestLockMiddleware(req: Request, res: Response, next: NextFunction) {
-  // Create a unique lock for this request
-  const requestLock = {
-    processing: false,
-    completed: false,
-    responsesSent: 0,
-    startTime: Date.now()
-  };
-  
-  // Attach to request
-  (req as any).requestLock = requestLock;
-  
-  // Track original response methods
-  const originalJson = res.json;
-  const originalSend = res.send;
-  const originalStatus = res.status;
-  const originalEnd = res.end;
-  
-  // Create a flag to track if this specific response object has sent
-  let thisResponseSent = false;
-  
-  // Wrap res.json to track sends
-  res.json = function(body?: any): Response {
-    const lock = (req as any).requestLock;
-    
-    if (thisResponseSent || lock.completed) {
-      const elapsed = Date.now() - lock.startTime;
-      console.error(`[RequestLock] Blocking duplicate json send for ${req.method} ${req.path} (request-id: ${(req as any).id}) after ${elapsed}ms`);
-      console.trace();
-      return res;
-    }
-    
-    thisResponseSent = true;
-    lock.completed = true;
-    lock.responsesSent++;
-    
-    // Clear any pending timeout
-    const timeoutHandle = (req as any).timeoutHandle;
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-      (req as any).timeoutHandle = null;
-    }
-    
-    return originalJson.call(res, body);
-  };
-  
-  // Wrap res.send similarly
-  res.send = function(body?: any): Response {
-    const lock = (req as any).requestLock;
-    
-    if (thisResponseSent || lock.completed) {
-      const elapsed = Date.now() - lock.startTime;
-      console.error(`[RequestLock] Blocking duplicate send for ${req.method} ${req.path} (request-id: ${(req as any).id}) after ${elapsed}ms`);
-      console.trace();
-      return res;
-    }
-    
-    thisResponseSent = true;
-    lock.completed = true;
-    lock.responsesSent++;
-    
-    // Clear any pending timeout
-    const timeoutHandle = (req as any).timeoutHandle;
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-      (req as any).timeoutHandle = null;
-    }
-    
-    return originalSend.call(res, body);
-  };
-  
-  // Wrap res.end
-  res.end = function(...args: any[]): Response {
-    const lock = (req as any).requestLock;
-    
-    if (thisResponseSent || lock.completed) {
-      return res;
-    }
-    
-    thisResponseSent = true;
-    lock.completed = true;
-    
-    // Clear any pending timeout
-    const timeoutHandle = (req as any).timeoutHandle;
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-      (req as any).timeoutHandle = null;
-    }
-    
-    return (originalEnd as any).apply(res, args);
-  };
-  
-  // Wrap res.status to chain properly
-  res.status = function(code: number): Response {
-    if (thisResponseSent) {
-      console.error(`[RequestLock] Cannot set status after response sent for ${req.method} ${req.path}`);
-      return res;
-    }
-    return originalStatus.call(res, code);
-  };
-  
-  next();
-}
 
 /**
  * Improved timeout middleware that works with request lock
@@ -241,4 +131,56 @@ export function safeController(controllerFn: Function) {
       }
     }
   };
+}
+
+/**
+ * Middleware to prevent duplicate request processing
+ * This ensures each request is only processed once even if handlers are called multiple times
+ */
+
+// Simpler approach - only wrap the lowest level
+export function requestLockMiddleware(req: Request, res: Response, next: NextFunction) {
+  let responseSent = false;
+  const startTime = Date.now();
+  
+  const originalSend = res.send;
+  const originalEnd = res.end;
+  
+  // Only wrap send (json calls send internally)
+  res.send = function(body?: any): Response {
+    if (responseSent) {
+      const elapsed = Date.now() - startTime;
+      console.error(`[RequestLock] Blocking duplicate send for ${req.method} ${req.path} (request-id: ${(req as any).id}) after ${elapsed}ms`);
+      console.trace();
+      return res;
+    }
+    
+    responseSent = true;
+    
+    // Clear timeout if exists
+    const timeoutHandle = (req as any).timeoutHandle;
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+    
+    return originalSend.call(res, body);
+  };
+  
+  // Also wrap end for completeness
+  res.end = function(...args: any[]): Response {
+    if (responseSent) {
+      return res;
+    }
+    
+    responseSent = true;
+    
+    const timeoutHandle = (req as any).timeoutHandle;
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+    
+    return (originalEnd as any).apply(res, args);
+  };
+  
+  next();
 }
