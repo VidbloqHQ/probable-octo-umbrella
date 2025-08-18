@@ -1,31 +1,29 @@
-// utils/singleton-controller.ts
-
-/**
- * Ensures a controller only executes once per request
- */
 export function singletonController(controllerName: string, controller: Function) {
   return async (req: any, res: any, next?: any) => {
     const executionKey = `${controllerName}_executed`;
     const executionId = Math.random().toString(36).substring(7);
     
-    // Check if already executed
+    // Add more detailed logging
+    console.log(`[Singleton] Checking ${controllerName} for request ${req.id}`);
+    
     if (req[executionKey]) {
-      console.warn(`[Singleton] ${controllerName} already executed for request ${req.id}`);
-      console.warn(`  Previous execution: ${req[executionKey]}`);
-      console.warn(`  Attempted execution: ${executionId}`);
-      return; // Don't execute again
+      console.error(`[Singleton] BLOCKING ${controllerName} - already executed!`);
+      console.error(`  Request: ${req.method} ${req.path}`);
+      console.error(`  Request ID: ${req.id}`);
+      console.error(`  Previous execution: ${req[executionKey]}`);
+      console.error(`  Attempted execution: ${executionId}`);
+      return;
     }
     
-    // Mark as executed
+    console.log(`[Singleton] Executing ${controllerName} (${executionId}) for request ${req.id}`);
     req[executionKey] = executionId;
     
-    // Execute the actual controller
     try {
       await controller(req, res, next);
+      console.log(`[Singleton] Completed ${controllerName} (${executionId})`);
     } catch (error) {
-      // Let error bubble up to error handler
+      console.error(`[Singleton] Error in ${controllerName} (${executionId}):`, error);
       throw error;
     }
   };
 }
-
