@@ -138,48 +138,29 @@ export function safeController(controllerFn: Function) {
  * This ensures each request is only processed once even if handlers are called multiple times
  */
 
-// Simpler approach - only wrap the lowest level
+// MINIMAL approach - just track, don't block
 export function requestLockMiddleware(req: Request, res: Response, next: NextFunction) {
-  let responseSent = false;
   const startTime = Date.now();
+  let sendCount = 0;
   
+  // Just track calls, don't block
+  const originalJson = res.json;
   const originalSend = res.send;
-  const originalEnd = res.end;
   
-  // Only wrap send (json calls send internally)
-  res.send = function(body?: any): Response {
-    if (responseSent) {
-      const elapsed = Date.now() - startTime;
-      console.error(`[RequestLock] Blocking duplicate send for ${req.method} ${req.path} (request-id: ${(req as any).id}) after ${elapsed}ms`);
-      console.trace();
-      return res;
+  res.json = function(body?: any): Response {
+    sendCount++;
+    if (sendCount > 1) {
+      console.error(`[WARNING] Multiple json calls (${sendCount}) for ${req.method} ${req.path} at ${Date.now() - startTime}ms`);
     }
-    
-    responseSent = true;
-    
-    // Clear timeout if exists
-    const timeoutHandle = (req as any).timeoutHandle;
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-    
-    return originalSend.call(res, body);
+    return originalJson.call(res, body);
   };
   
-  // Also wrap end for completeness
-  res.end = function(...args: any[]): Response {
-    if (responseSent) {
-      return res;
+  res.send = function(body?: any): Response {
+    sendCount++;
+    if (sendCount > 1) {
+      console.error(`[WARNING] Multiple send calls (${sendCount}) for ${req.method} ${req.path} at ${Date.now() - startTime}ms`);
     }
-    
-    responseSent = true;
-    
-    const timeoutHandle = (req as any).timeoutHandle;
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-    
-    return (originalEnd as any).apply(res, args);
+    return originalSend.call(res, body);
   };
   
   next();

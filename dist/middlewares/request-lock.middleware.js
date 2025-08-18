@@ -118,39 +118,26 @@ export function safeController(controllerFn) {
  * Middleware to prevent duplicate request processing
  * This ensures each request is only processed once even if handlers are called multiple times
  */
-// Simpler approach - only wrap the lowest level
+// MINIMAL approach - just track, don't block
 export function requestLockMiddleware(req, res, next) {
-    let responseSent = false;
     const startTime = Date.now();
+    let sendCount = 0;
+    // Just track calls, don't block
+    const originalJson = res.json;
     const originalSend = res.send;
-    const originalEnd = res.end;
-    // Only wrap send (json calls send internally)
-    res.send = function (body) {
-        if (responseSent) {
-            const elapsed = Date.now() - startTime;
-            console.error(`[RequestLock] Blocking duplicate send for ${req.method} ${req.path} (request-id: ${req.id}) after ${elapsed}ms`);
-            console.trace();
-            return res;
+    res.json = function (body) {
+        sendCount++;
+        if (sendCount > 1) {
+            console.error(`[WARNING] Multiple json calls (${sendCount}) for ${req.method} ${req.path} at ${Date.now() - startTime}ms`);
         }
-        responseSent = true;
-        // Clear timeout if exists
-        const timeoutHandle = req.timeoutHandle;
-        if (timeoutHandle) {
-            clearTimeout(timeoutHandle);
+        return originalJson.call(res, body);
+    };
+    res.send = function (body) {
+        sendCount++;
+        if (sendCount > 1) {
+            console.error(`[WARNING] Multiple send calls (${sendCount}) for ${req.method} ${req.path} at ${Date.now() - startTime}ms`);
         }
         return originalSend.call(res, body);
-    };
-    // Also wrap end for completeness
-    res.end = function (...args) {
-        if (responseSent) {
-            return res;
-        }
-        responseSent = true;
-        const timeoutHandle = req.timeoutHandle;
-        if (timeoutHandle) {
-            clearTimeout(timeoutHandle);
-        }
-        return originalEnd.apply(res, args);
     };
     next();
 }
