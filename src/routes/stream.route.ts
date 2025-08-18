@@ -9,18 +9,18 @@ import {
   updateStream,
   stopStreamRecord,
 } from "../controllers/stream.controller.js";
-import { safeController } from "../middlewares/request-lock.middleware.js";
+// import { safeController } from "../middlewares/request-lock.middleware.js";
 import { singletonController } from "../utils/singleton-controller.js";
 
 const router = express.Router();
 
-router.post("/", safeController(singletonController('createStream', createStream)));
-router.post("/token", safeController(singletonController('createStreamToken', createStreamToken)));
-router.get("/:streamId", safeController(singletonController('getStream', getStream)));
-router.put("/:streamId", safeController(singletonController('updateStream', updateStream)));
-router.post("/record", safeController(singletonController('recordStream', recordStream)));
-router.post("/record/stop", safeController(singletonController('stopStreamRecord', stopStreamRecord)));
-router.post("/youtube", safeController(singletonController('streamToYoutube', streamToYoutube)));
-router.post("/youtube/stop", safeController(singletonController('stopYoutubeStream', stopYoutubeStream)));
+router.post("/", singletonController('createStream', createStream));
+router.post("/token", singletonController('createStreamToken', createStreamToken));
+router.get("/:streamId", singletonController('getStream', getStream));
+router.put("/:streamId", singletonController('updateStream', updateStream));
+router.post("/record", singletonController('recordStream', recordStream));
+router.post("/record/stop", singletonController('stopStreamRecord', stopStreamRecord));
+router.post("/youtube", singletonController('streamToYoutube', streamToYoutube));
+router.post("/youtube/stop", singletonController('stopYoutubeStream', stopYoutubeStream));
 
 export default router;

@@ -6,14 +6,14 @@ import {
   listUsers, 
   deleteUser 
 } from "../controllers/user.controller.js";
-import { safeController } from "../middlewares/request-lock.middleware.js";
-
+// import { safeController } from "../middlewares/request-lock.middleware.js";
+import { singletonController } from "../utils/singleton-controller.js";
 const router = express.Router();
 
-router.post("/", safeController(createUser));
-router.get("/", safeController(listUsers));
-router.get("/:userWallet", safeController(getUser));
-router.put("/:userId", safeController(updateUser));
-router.delete("/:userId", safeController(deleteUser));
+router.post("/", singletonController('createUser', createUser));
+router.get("/", singletonController('listUsers', listUsers));
+router.get("/:userWallet", singletonController('getUser', getUser));
+router.put("/:userId", singletonController('updateUser', updateUser));
+router.delete("/:userId", singletonController('deleteUser', deleteUser));
 
 export default router;

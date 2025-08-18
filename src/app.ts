@@ -815,7 +815,7 @@ app.use(requestLockMiddleware);
 // ROUTE DEBUG MIDDLEWARE - FOR DEBUGGING
 // Remove this in production after fixing the issue
 // ============================================
-app.use(routeDebugMiddleware);
+// app.use(routeDebugMiddleware);
 
 // ============================================
 // TIMEOUT MIDDLEWARE

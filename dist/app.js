@@ -543,7 +543,7 @@ import { createServer } from "http";
 import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 import { requestLockMiddleware, timeoutMiddleware } from "./middlewares/request-lock.middleware.js";
-import { routeDebugMiddleware, logAllRoutes } from "./middlewares/route-debug.middleware.js";
+import { logAllRoutes } from "./middlewares/route-debug.middleware.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
 import { isDatabaseHealthy, getDatabaseMetrics, db, executeQuery } from "./prisma.js";
@@ -703,7 +703,7 @@ app.use(requestLockMiddleware);
 // ROUTE DEBUG MIDDLEWARE - FOR DEBUGGING
 // Remove this in production after fixing the issue
 // ============================================
-app.use(routeDebugMiddleware);
+// app.use(routeDebugMiddleware);
 // ============================================
 // TIMEOUT MIDDLEWARE
 // ============================================
