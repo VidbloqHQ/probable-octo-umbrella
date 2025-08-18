@@ -1,5 +1,60 @@
+// import { Request, Response, NextFunction } from "express";
+export function requestLockMiddleware(req, res, next) {
+    const startTime = Date.now();
+    let responseSent = false;
+    let isInternalCall = false;
+    // Store original methods
+    const originalJson = res.json;
+    const originalSend = res.send;
+    const originalEnd = res.end;
+    // Wrap res.json
+    res.json = function (body) {
+        if (responseSent) {
+            console.error(`[DUPLICATE] res.json called after response sent for ${req.method} ${req.path} at ${Date.now() - startTime}ms`);
+            console.trace();
+            return res;
+        }
+        responseSent = true;
+        isInternalCall = true; // Mark that we're about to call send internally
+        const result = originalJson.call(res, body);
+        isInternalCall = false;
+        return result;
+    };
+    // Wrap res.send
+    res.send = function (body) {
+        // If this is called by res.json internally, don't count it as duplicate
+        if (isInternalCall) {
+            return originalSend.call(res, body);
+        }
+        if (responseSent) {
+            console.error(`[DUPLICATE] res.send called after response sent for ${req.method} ${req.path} at ${Date.now() - startTime}ms`);
+            console.trace();
+            return res;
+        }
+        responseSent = true;
+        return originalSend.call(res, body);
+    };
+    // Wrap res.end
+    res.end = function (...args) {
+        if (responseSent && !isInternalCall) {
+            console.error(`[DUPLICATE] res.end called after response sent for ${req.method} ${req.path}`);
+            return res;
+        }
+        responseSent = true;
+        return originalEnd.apply(res, args);
+    };
+    // Clear timeout when response is sent
+    res.on('finish', () => {
+        const timeoutHandle = req.timeoutHandle;
+        if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+            req.timeoutHandle = null;
+        }
+    });
+    next();
+}
 /**
- * Improved timeout middleware that works with request lock
+ * Improved timeout middleware
  */
 export function timeoutMiddleware(timeoutMs = 15000) {
     return (req, res, next) => {
@@ -11,16 +66,11 @@ export function timeoutMiddleware(timeoutMs = 15000) {
         req.abortController = new AbortController();
         // Set up timeout handler
         const timeoutHandle = setTimeout(() => {
-            const lock = req.requestLock;
-            // Check if response already sent
-            if (lock && lock.completed) {
-                return; // Response already sent, do nothing
-            }
             if (res.headersSent) {
-                return; // Headers already sent, do nothing
+                return; // Response already sent
             }
             console.error(`[TIMEOUT] Request timeout after ${timeoutMs}ms: ${req.method} ${req.path}`);
-            // Try to abort any ongoing operations
+            // Abort any ongoing operations
             if (req.abortController) {
                 req.abortController.abort();
             }
@@ -42,102 +92,18 @@ export function timeoutMiddleware(timeoutMs = 15000) {
         // Store timeout handle on request so it can be cleared
         req.timeoutHandle = timeoutHandle;
         // Clear timeout when response is complete
-        const cleanup = () => {
+        res.on('finish', () => {
             if (req.timeoutHandle) {
                 clearTimeout(req.timeoutHandle);
                 req.timeoutHandle = null;
             }
-        };
-        res.on('finish', cleanup);
-        res.on('close', cleanup);
-        res.on('error', cleanup);
+        });
+        res.on('close', () => {
+            if (req.timeoutHandle) {
+                clearTimeout(req.timeoutHandle);
+                req.timeoutHandle = null;
+            }
+        });
         next();
     };
-}
-/**
- * Controller wrapper that uses request lock
- */
-export function safeController(controllerFn) {
-    return async (req, res, next) => {
-        const lock = req.requestLock;
-        // Check if this request is already being processed
-        if (lock && lock.processing) {
-            console.warn(`[SafeController] Request already being processed: ${req.method} ${req.path} (request-id: ${req.id})`);
-            return; // Don't process again
-        }
-        // Check if this request already completed
-        if (lock && lock.completed) {
-            console.warn(`[SafeController] Request already completed: ${req.method} ${req.path} (request-id: ${req.id})`);
-            return; // Don't process again
-        }
-        // Check if request timed out
-        if (req.timedOut) {
-            console.warn(`[SafeController] Request already timed out: ${req.method} ${req.path}`);
-            return;
-        }
-        // Mark as processing
-        if (lock) {
-            lock.processing = true;
-        }
-        try {
-            // Check abort signal before executing
-            if (req.abortController?.signal?.aborted) {
-                console.log(`[SafeController] Request aborted before execution: ${req.method} ${req.path}`);
-                return;
-            }
-            await controllerFn(req, res, next);
-        }
-        catch (error) {
-            // Only send error if response hasn't been sent
-            if (!res.headersSent && lock && !lock.completed) {
-                console.error(`[SafeController] Error in ${req.method} ${req.path}:`, error);
-                if (error.code === 'TIMEOUT' || error.message === 'Query timeout') {
-                    res.status(504).json({
-                        error: 'Database query timeout',
-                        message: 'The operation took too long. Please try again.',
-                        requestId: req.id
-                    });
-                }
-                else {
-                    res.status(500).json({
-                        error: 'Internal server error',
-                        requestId: req.id
-                    });
-                }
-            }
-        }
-        finally {
-            // Mark as no longer processing
-            if (lock) {
-                lock.processing = false;
-            }
-        }
-    };
-}
-/**
- * Middleware to prevent duplicate request processing
- * This ensures each request is only processed once even if handlers are called multiple times
- */
-// MINIMAL approach - just track, don't block
-export function requestLockMiddleware(req, res, next) {
-    const startTime = Date.now();
-    let sendCount = 0;
-    // Just track calls, don't block
-    const originalJson = res.json;
-    const originalSend = res.send;
-    res.json = function (body) {
-        sendCount++;
-        if (sendCount > 1) {
-            console.error(`[WARNING] Multiple json calls (${sendCount}) for ${req.method} ${req.path} at ${Date.now() - startTime}ms`);
-        }
-        return originalJson.call(res, body);
-    };
-    res.send = function (body) {
-        sendCount++;
-        if (sendCount > 1) {
-            console.error(`[WARNING] Multiple send calls (${sendCount}) for ${req.method} ${req.path} at ${Date.now() - startTime}ms`);
-        }
-        return originalSend.call(res, body);
-    };
-    next();
 }
