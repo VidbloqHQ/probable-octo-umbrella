@@ -1,5 +1,3 @@
-// // middlewares/response-guard.middleware.ts
-// import { Request, Response, NextFunction } from "express";
 /**
  * Middleware to prevent ERR_HTTP_HEADERS_SENT errors
  * Tracks if response has been sent and prevents double sends

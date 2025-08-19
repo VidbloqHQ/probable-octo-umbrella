@@ -1,4 +1,3 @@
-// import { Request, Response, NextFunction } from "express";
 export function requestLockMiddleware(req, res, next) {
     const startTime = Date.now();
     let responseSent = false;
