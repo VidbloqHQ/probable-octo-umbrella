@@ -211,6 +211,44 @@ export async function isDatabaseHealthy(): Promise<boolean> {
 }
 
 // Get database metrics
+// export async function getDatabaseMetrics() {
+//   try {
+//     // Check for idle transactions
+//     const idleTransactions = await db.$queryRaw<any[]>`
+//       SELECT count(*) as count, state 
+//       FROM pg_stat_activity 
+//       WHERE datname = current_database() 
+//         AND state = 'idle in transaction'
+//       GROUP BY state
+//     `;
+    
+//     const poolStats = await db.$queryRaw<any[]>`
+//       SELECT count(*) as total_connections,
+//              sum(case when state = 'active' then 1 else 0 end) as active,
+//              sum(case when state = 'idle' then 1 else 0 end) as idle,
+//              sum(case when state = 'idle in transaction' then 1 else 0 end) as idle_in_transaction
+//       FROM pg_stat_activity
+//       WHERE datname = current_database()
+//     `;
+    
+//     return {
+//       provider: 'postgresql-pgbouncer',
+//       healthy: true,
+//       connectionLimit: 10,
+//       poolStats: poolStats[0] || {},
+//       idleTransactions: idleTransactions.length > 0 ? idleTransactions[0].count : 0,
+//       note: 'Using PgBouncer transaction pooling mode - NO TRANSACTIONS'
+//     };
+//   } catch (error: any) {
+//     return {
+//       provider: 'postgresql-pgbouncer',
+//       healthy: false,
+//       error: error.message
+//     };
+//   }
+// }
+
+// In getDatabaseMetrics function, convert BigInt to number or string
 export async function getDatabaseMetrics() {
   try {
     // Check for idle transactions
@@ -231,12 +269,24 @@ export async function getDatabaseMetrics() {
       WHERE datname = current_database()
     `;
     
+    // Convert BigInt to number for JSON serialization
+    const convertedPoolStats = poolStats[0] ? {
+      total_connections: Number(poolStats[0].total_connections || 0),
+      active: Number(poolStats[0].active || 0),
+      idle: Number(poolStats[0].idle || 0),
+      idle_in_transaction: Number(poolStats[0].idle_in_transaction || 0)
+    } : {};
+    
+    const convertedIdleTransactions = idleTransactions.length > 0 
+      ? Number(idleTransactions[0].count || 0)
+      : 0;
+    
     return {
       provider: 'postgresql-pgbouncer',
       healthy: true,
       connectionLimit: 10,
-      poolStats: poolStats[0] || {},
-      idleTransactions: idleTransactions.length > 0 ? idleTransactions[0].count : 0,
+      poolStats: convertedPoolStats,
+      idleTransactions: convertedIdleTransactions,
       note: 'Using PgBouncer transaction pooling mode - NO TRANSACTIONS'
     };
   } catch (error: any) {
