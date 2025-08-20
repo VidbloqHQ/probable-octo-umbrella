@@ -200,10 +200,9 @@ export async function isDatabaseHealthy() {
 //     };
 //   }
 // }
-// In getDatabaseMetrics function, convert BigInt to number or string
+// In getDatabaseMetrics function, convert BigInt to number
 export async function getDatabaseMetrics() {
     try {
-        // Check for idle transactions
         const idleTransactions = await db.$queryRaw `
       SELECT count(*) as count, state 
       FROM pg_stat_activity 
@@ -220,13 +219,14 @@ export async function getDatabaseMetrics() {
       WHERE datname = current_database()
     `;
         // Convert BigInt to number for JSON serialization
-        const convertedPoolStats = poolStats[0] ? {
-            total_connections: Number(poolStats[0].total_connections || 0),
-            active: Number(poolStats[0].active || 0),
-            idle: Number(poolStats[0].idle || 0),
-            idle_in_transaction: Number(poolStats[0].idle_in_transaction || 0)
-        } : {};
-        const convertedIdleTransactions = idleTransactions.length > 0
+        const stats = poolStats[0] || {};
+        const convertedPoolStats = {
+            total_connections: Number(stats.total_connections || 0),
+            active: Number(stats.active || 0),
+            idle: Number(stats.idle || 0),
+            idle_in_transaction: Number(stats.idle_in_transaction || 0)
+        };
+        const idleCount = idleTransactions.length > 0
             ? Number(idleTransactions[0].count || 0)
             : 0;
         return {
@@ -234,7 +234,7 @@ export async function getDatabaseMetrics() {
             healthy: true,
             connectionLimit: 10,
             poolStats: convertedPoolStats,
-            idleTransactions: convertedIdleTransactions,
+            idleTransactions: idleCount,
             note: 'Using PgBouncer transaction pooling mode - NO TRANSACTIONS'
         };
     }
