@@ -3,7 +3,6 @@ import { createServer } from "http";
 import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 import { requestLockMiddleware, timeoutMiddleware } from "./middlewares/request-lock.middleware.js";
-import { logAllRoutes } from "./middlewares/route-debug.middleware.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
 import { isDatabaseHealthy, getDatabaseMetrics, db, executeQuery } from "./prisma.js";
@@ -319,8 +318,8 @@ app.use("/program", ProgramRouter.default);
 // ============================================
 // LOG ALL REGISTERED ROUTES
 // ============================================
-console.log('App initialization complete. Logging routes...');
-logAllRoutes(app);
+// console.log('App initialization complete. Logging routes...');
+// logAllRoutes(app);
 // ============================================
 // 404 HANDLER
 // ============================================

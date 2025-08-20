@@ -371,8 +371,8 @@ app.use("/program", ProgramRouter.default);
 // ============================================
 // LOG ALL REGISTERED ROUTES
 // ============================================
-console.log('App initialization complete. Logging routes...');
-logAllRoutes(app);
+// console.log('App initialization complete. Logging routes...');
+// logAllRoutes(app);
 
 // ============================================
 // 404 HANDLER

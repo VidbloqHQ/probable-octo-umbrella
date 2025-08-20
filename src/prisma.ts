@@ -25,8 +25,8 @@ const prismaClientSingleton = () => {
 
   return new PrismaClient({
     log: isProduction 
-      ? ['error'] 
-      : ['error', 'warn'],
+      ? ['error', 'warn', 'query']
+      : ['error', 'warn', 'query'],
     errorFormat: isProduction ? 'minimal' : 'pretty',
     datasources: {
       db: {
