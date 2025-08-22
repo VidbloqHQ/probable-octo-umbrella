@@ -24,9 +24,12 @@ const pendingDisconnects = {};
 // Track participant heartbeats for better disconnect detection
 const participantHeartbeats = {};
 // Grace period settings
-const DISCONNECT_GRACE_PERIOD = 3000; // 3 seconds
-const HEARTBEAT_INTERVAL = 30000; // 30 seconds
-const HEARTBEAT_TIMEOUT = 60000; // 60 seconds - consider participant inactive
+// const DISCONNECT_GRACE_PERIOD = 3000; // 3 seconds
+// const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+// const HEARTBEAT_TIMEOUT = 60000; // 60 seconds - consider participant inactive
+const DISCONNECT_GRACE_PERIOD = 10000; // Increase to 10 seconds
+const HEARTBEAT_INTERVAL = 25000; // Reduce to 25 seconds
+const HEARTBEAT_TIMEOUT = 90000; // Increase to 90 seconds
 export let wss;
 // Generate unique connection ID
 const generateConnectionId = () => {
@@ -1030,12 +1033,28 @@ const createWebSocketServer = (server) => {
                 console.error("Error handling WebSocket message:", error);
             }
         });
-        extWs.on("close", () => {
-            console.log(`WebSocket connection closed: ${extWs.connectionId}`);
+        extWs.on("close", (code, reason) => {
+            console.log(`WebSocket connection closed:`, {
+                connectionId: extWs.connectionId,
+                participantId: extWs.participantId,
+                code,
+                reason: reason ? reason.toString() : "No reason provided",
+                wasClean: code === 1000 || code === 1001,
+                lastActivity: extWs.lastActivityTime
+                    ? new Date(extWs.lastActivityTime).toISOString()
+                    : "Unknown",
+                timestamp: new Date().toISOString(),
+            });
             handleDisconnect(extWs);
         });
         extWs.on("error", (error) => {
-            console.error("WebSocket error:", error);
+            console.error("WebSocket error 1:", error);
+            console.error("WebSocket error 2:", {
+                connectionId: extWs.connectionId,
+                participantId: extWs.participantId,
+                error: error.message,
+                timestamp: new Date().toISOString(),
+            });
             handleDisconnect(extWs, true); // Immediate disconnect on error
         });
     });

@@ -1,7 +1,3 @@
-// import { Request, Response, NextFunction } from 'express';
-// import { RateLimiterRedis, RateLimiterRes } from 'rate-limiter-flexible';
-// import { redisClient } from '../redis.js';
-// import { TenantRequest } from '../types/index.js';
 import { RateLimiterRedis, RateLimiterMemory } from 'rate-limiter-flexible';
 import { redisClient, isRedisAvailable } from '../redis.js';
 // Different rate limit tiers
