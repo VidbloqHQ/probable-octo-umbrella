@@ -6,6 +6,7 @@ export function requestLockMiddleware(req, res, next) {
     const originalJson = res.json;
     const originalSend = res.send;
     const originalEnd = res.end;
+    console.log("Request Lock Middleware Initialized", startTime);
     // Wrap res.json
     res.json = function (body) {
         if (responseSent) {
@@ -50,6 +51,7 @@ export function requestLockMiddleware(req, res, next) {
             req.timeoutHandle = null;
         }
     });
+    console.log("Request Lock Middleware ended", Date.now());
     next();
 }
 /**

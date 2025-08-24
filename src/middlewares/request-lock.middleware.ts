@@ -9,7 +9,7 @@ export function requestLockMiddleware(req: Request, res: Response, next: NextFun
   const originalJson = res.json;
   const originalSend = res.send;
   const originalEnd = res.end;
-  
+  console.log("Request Lock Middleware Initialized", startTime);
   // Wrap res.json
   res.json = function(body?: any): Response {
     if (responseSent) {
@@ -63,7 +63,7 @@ export function requestLockMiddleware(req: Request, res: Response, next: NextFun
       (req as any).timeoutHandle = null;
     }
   });
-  
+    console.log("Request Lock Middleware ended", Date.now());
   next();
 }
 
