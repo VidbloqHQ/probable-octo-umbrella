@@ -209,7 +209,7 @@ app.use((req: Request, res: Response, next) => {
 // ============================================
 // TIMEOUT MIDDLEWARE
 // ============================================
-app.use(timeoutMiddleware(MAX_REQUEST_TIMEOUT));
+// app.use(timeoutMiddleware(MAX_REQUEST_TIMEOUT));
 
 // ============================================
 // REQUEST LOGGING (OPTIONAL)
