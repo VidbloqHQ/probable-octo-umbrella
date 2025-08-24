@@ -441,6 +441,7 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
     success = true;
     
     if (!res.headersSent && !abortController?.signal?.aborted) {
+      console.log("end time", Date.now());
       return res.status(200).json({ token, userType });
     }
   } catch (error: any) {
@@ -463,7 +464,6 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
   } finally {
     trackQuery(success);
   }
-  console.log("end time", Date.now());
 };
 
 /**

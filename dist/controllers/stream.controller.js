@@ -323,6 +323,7 @@ export const createStreamToken = async (req, res) => {
         const token = await accessToken.toJwt();
         success = true;
         if (!res.headersSent && !abortController?.signal?.aborted) {
+            console.log("end time", Date.now());
             return res.status(200).json({ token, userType });
         }
     }
@@ -344,7 +345,6 @@ export const createStreamToken = async (req, res) => {
     finally {
         trackQuery(success);
     }
-    console.log("end time", Date.now());
 };
 /**
  * Controller for getting stream details - FIXED WITH SINGLE RESPONSE
