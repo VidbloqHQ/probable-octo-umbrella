@@ -271,7 +271,7 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
   const tenant = req.tenant;
   let success = false;
 
-  console.log("start time", Date.now());
+  console.log("start time", userName, Date.now());
   try {
     const abortController = (req as any).abortController;
     if (res.headersSent || abortController?.signal?.aborted) {
@@ -441,7 +441,7 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
     success = true;
     
     if (!res.headersSent && !abortController?.signal?.aborted) {
-      console.log("end time", Date.now());
+      console.log("end time", userName, Date.now());
       return res.status(200).json({ token, userType });
     }
   } catch (error: any) {
