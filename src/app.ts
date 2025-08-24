@@ -204,7 +204,7 @@ app.use((req: Request, res: Response, next) => {
 // REQUEST LOCK MIDDLEWARE - CRITICAL!
 // Must be BEFORE all other response-modifying middleware
 // ============================================
-app.use(requestLockMiddleware);
+// app.use(requestLockMiddleware);
 
 // ============================================
 // TIMEOUT MIDDLEWARE

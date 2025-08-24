@@ -2,7 +2,7 @@ import express from "express";
 import { createServer } from "http";
 import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
-import { requestLockMiddleware, timeoutMiddleware } from "./middlewares/request-lock.middleware.js";
+import { timeoutMiddleware } from "./middlewares/request-lock.middleware.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
 import createSocketServer from "./websocket.js";
 import { isDatabaseHealthy, getDatabaseMetrics, db, executeQuery } from "./prisma.js";
@@ -165,7 +165,7 @@ app.use((req, res, next) => {
 // REQUEST LOCK MIDDLEWARE - CRITICAL!
 // Must be BEFORE all other response-modifying middleware
 // ============================================
-app.use(requestLockMiddleware);
+// app.use(requestLockMiddleware);
 // ============================================
 // TIMEOUT MIDDLEWARE
 // ============================================
