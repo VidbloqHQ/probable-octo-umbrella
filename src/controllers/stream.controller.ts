@@ -271,6 +271,7 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
   const tenant = req.tenant;
   let success = false;
 
+  console.log("start time", Date.now());
   try {
     const abortController = (req as any).abortController;
     if (res.headersSent || abortController?.signal?.aborted) {
@@ -462,6 +463,7 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
   } finally {
     trackQuery(success);
   }
+  console.log("end time", Date.now());
 };
 
 /**

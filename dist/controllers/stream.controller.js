@@ -186,6 +186,7 @@ export const createStreamToken = async (req, res) => {
     const { roomName, userName, wallet, avatarUrl } = req.body;
     const tenant = req.tenant;
     let success = false;
+    console.log("start time", Date.now());
     try {
         const abortController = req.abortController;
         if (res.headersSent || abortController?.signal?.aborted) {
@@ -343,6 +344,7 @@ export const createStreamToken = async (req, res) => {
     finally {
         trackQuery(success);
     }
+    console.log("end time", Date.now());
 };
 /**
  * Controller for getting stream details - FIXED WITH SINGLE RESPONSE
