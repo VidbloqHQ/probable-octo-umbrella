@@ -224,4 +224,14 @@ router.get('/db-simple', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/queue-status', (req: Request, res: Response) => {
+  const queryStats = getQueryStats();
+  
+  res.json({
+    message: 'Query queue removed for better performance',
+    queryStats,
+    recommendation: 'Direct execution enabled - no artificial throttling'
+  });
+});
+
 export default router;

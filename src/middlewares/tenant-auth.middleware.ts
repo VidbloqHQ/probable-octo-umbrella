@@ -318,7 +318,7 @@ export const authenticateTenant = async (
       }),
       { 
         maxRetries: 1,
-        timeout: 3000
+        timeout: 2000
       }
     );
 

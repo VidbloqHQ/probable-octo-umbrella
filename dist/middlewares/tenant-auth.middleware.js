@@ -252,7 +252,7 @@ export const authenticateTenant = async (req, res, next) => {
             }
         }), {
             maxRetries: 1,
-            timeout: 3000
+            timeout: 2000
         });
         if (!result) {
             return res.status(401).json({
