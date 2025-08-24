@@ -266,217 +266,17 @@ export const createStream = async (req: TenantRequest, res: Response) => {
 /**
  * Controller for creating access token - FIXED WITH ABORT CHECKING
  */
-// export const createStreamToken = async (req: TenantRequest, res: Response) => {
-//   const { roomName, userName, wallet, avatarUrl } = req.body;
-//   const tenant = req.tenant;
-//   let success = false;
-
-//   try {
-//     const abortController = (req as any).abortController;
-//     if (res.headersSent || abortController?.signal?.aborted) {
-//       return;
-//     }
-
-//     if (!tenant) {
-//       return res.status(401).json({ error: "Tenant authentication required." });
-//     }
-
-//     if (!roomName || !userName || !wallet || !isValidWalletAddress(wallet)) {
-//       return res.status(400).json({
-//         error: "Missing or invalid required fields",
-//       });
-//     }
-
-//     // Step 1: Get stream (with caching and timeout)
-//     const cacheKey = `${tenant.id}:${roomName}`;
-//     let existingStream = streamCache.get(cacheKey)?.data;
-    
-//     if (!existingStream || Date.now() - streamCache.get(cacheKey)!.timestamp > STREAM_CACHE_TTL) {
-//       existingStream = await executeQuery(
-//         () => db.stream.findFirst({
-//           where: {
-//             name: roomName,
-//             tenantId: tenant.id,
-//           },
-//           include: { user: true },
-//         }),
-//         { maxRetries: 1, timeout: 2000 }
-//       );
-      
-//       if (!existingStream) {
-//         return res.status(404).json({ error: "Stream not found" });
-//       }
-      
-//       streamCache.set(cacheKey, { data: existingStream, timestamp: Date.now() });
-//     }
-
-//     // Check abort before continuing
-//     if (res.headersSent || abortController?.signal?.aborted) {
-//       return;
-//     }
-
-//     // Step 2: Upsert user (atomic) with timeout
-//     const user = await executeQuery(
-//       () => db.user.upsert({
-//         where: {
-//           walletAddress_tenantId: {
-//             walletAddress: wallet,
-//             tenantId: tenant.id
-//           }
-//         },
-//         update: {}, // No update needed
-//         create: {
-//           walletAddress: wallet,
-//           tenantId: tenant.id,
-//           points: 0
-//         }
-//       }),
-//       { maxRetries: 1, timeout: 2000 }
-//     );
-
-//     // Step 3: Determine userType
-//     let userType: "host" | "co-host" | "guest";
-//     if (user.id === existingStream.userId) {
-//       userType = "host";
-//     } else if (existingStream.streamSessionType === StreamSessionType.Meeting) {
-//       userType = "co-host";
-//     } else {
-//       userType = "guest";
-//     }
-
-//     // Step 4: Check access permissions
-//     if (!existingStream.isPublic && userType === "guest") {
-//       return res.status(403).json({ error: "This stream requires permission to join" });
-//     }
-
-//     if (userType === "guest" && !existingStream.hasHost) {
-//       return res.status(403).json({ error: "Waiting for host to join" });
-//     }
-
-//     // Step 5: Upsert participant (atomic) with timeout
-//     const participant = await executeQuery(
-//       () => db.participant.upsert({
-//         where: {
-//           walletAddress_streamId_tenantId: {
-//             walletAddress: wallet,
-//             streamId: existingStream.id,
-//             tenantId: tenant.id
-//           }
-//         },
-//         update: {
-//           userName,
-//           userType,
-//           leftAt: null, // Mark as rejoined
-//           version: { increment: 1 },
-//           ...(avatarUrl && { avatarUrl })
-//         },
-//         create: {
-//           userName,
-//           walletAddress: wallet,
-//           userType,
-//           streamId: existingStream.id,
-//           tenantId: tenant.id,
-//           totalPoints: 0,
-//           ...(avatarUrl && { avatarUrl })
-//         }
-//       }),
-//       { maxRetries: 1, timeout: 3000 }
-//     );
-
-//     // Step 6: Update stream if host joins (separate operation, can retry)
-//     if (userType === "host" && !existingStream.hasHost) {
-//       // Fire and forget - don't wait
-//       executeQuery(
-//         () => db.stream.updateMany({
-//           where: { 
-//             id: existingStream.id,
-//             hasHost: false // Only update if still false
-//           },
-//           data: {
-//             hasHost: true,
-//             isLive: true,
-//             startedAt: existingStream.startedAt || new Date(),
-//             version: { increment: 1 }
-//           },
-//         }),
-//         { maxRetries: 2, timeout: 3000 }
-//       ).catch(err => {
-//         console.error(`Failed to update stream status: ${err.message}`);
-//         // Non-critical - stream will function anyway
-//       });
-      
-//       // Invalidate cache
-//       streamCache.delete(cacheKey);
-//     }
-
-//     // Step 7: Generate token
-//     const accessToken = new AccessToken(
-//       process.env.LIVEKIT_API_KEY!,
-//       process.env.LIVEKIT_API_SECRET!,
-//       {
-//         identity: participant.id,
-//         ttl: "60m",
-//         metadata: JSON.stringify({
-//           userName,
-//           participantId: participant.id,
-//           userType,
-//           walletAddress: wallet,
-//           ...(avatarUrl && { avatarUrl }),
-//         }),
-//       }
-//     );
-
-//     accessToken.addGrant({
-//       roomJoin: true,
-//       room: roomName,
-//       canPublish: userType === "host" || userType === "co-host",
-//       canSubscribe: true,
-//       canPublishData: true,
-//       roomRecord: userType === "host" || userType === "co-host",
-//     });
-
-//     const token = await accessToken.toJwt();
-    
-//     success = true;
-    
-//     if (!res.headersSent && !abortController?.signal?.aborted) {
-//       return res.status(200).json({ token, userType });
-//     }
-//   } catch (error: any) {
-//     console.error("Error creating token:", error);
-    
-//     if (res.headersSent) return;
-    
-//     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-//       return res.status(504).json({ 
-//         error: "Database query timeout",
-//         message: "The operation took too long. Please try again."
-//       });
-//     }
-    
-//     if (error.message?.includes("permission") || error.message?.includes("Waiting for host")) {
-//       return res.status(403).json({ error: error.message });
-//     }
-    
-//     return res.status(500).json({ error: "Internal server error" });
-//   } finally {
-//     trackQuery(success);
-//   }
-// };
-
-
 export const createStreamToken = async (req: TenantRequest, res: Response) => {
   const { roomName, userName, wallet, avatarUrl } = req.body;
   const tenant = req.tenant;
+  let success = false;
 
   try {
-    // Check abort signal
     const abortController = (req as any).abortController;
     if (res.headersSent || abortController?.signal?.aborted) {
       return;
     }
 
-    // Validation
     if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
@@ -487,73 +287,86 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // CRITICAL OPTIMIZATION: Parallel fetch with smaller timeout
-    const [streamData, user] = await Promise.all([
-      executeQuery(
+    // Step 1: Get stream (with caching and timeout)
+    const cacheKey = `${tenant.id}:${roomName}`;
+    let existingStream = streamCache.get(cacheKey)?.data;
+    
+    if (!existingStream || Date.now() - streamCache.get(cacheKey)!.timestamp > STREAM_CACHE_TTL) {
+      existingStream = await executeQuery(
         () => db.stream.findFirst({
-          where: { name: roomName, tenantId: tenant.id },
-          select: {
-            id: true,
-            userId: true,
-            streamSessionType: true,
-            isPublic: true,
-            hasHost: true,
-            startedAt: true
-          }
-        }),
-        { maxRetries: 1, timeout: 2000 } // Reduced timeout
-      ),
-      executeQuery(
-        () => db.user.upsert({
           where: {
-            walletAddress_tenantId: {
-              walletAddress: wallet,
-              tenantId: tenant.id
-            }
-          },
-          update: {},
-          create: {
-            walletAddress: wallet,
+            name: roomName,
             tenantId: tenant.id,
-            points: 0
-          }
+          },
+          include: { user: true },
         }),
-        { maxRetries: 1, timeout: 2000 } // Reduced timeout
-      )
-    ]);
-
-    if (!streamData) {
-      return res.status(404).json({ error: "Stream not found" });
+        { maxRetries: 1, timeout: 2000 }
+      );
+      
+      if (!existingStream) {
+        return res.status(404).json({ error: "Stream not found" });
+      }
+      
+      streamCache.set(cacheKey, { data: existingStream, timestamp: Date.now() });
     }
 
-    // Determine user type
-    const userType = user.id === streamData.userId ? "host" : 
-                    streamData.streamSessionType === StreamSessionType.Meeting ? "co-host" : 
-                    "guest";
+    // Check abort before continuing
+    if (res.headersSent || abortController?.signal?.aborted) {
+      return;
+    }
 
-    // Access checks
-    if (!streamData.isPublic && userType === "guest") {
+    // Step 2: Upsert user (atomic) with timeout
+    const user = await executeQuery(
+      () => db.user.upsert({
+        where: {
+          walletAddress_tenantId: {
+            walletAddress: wallet,
+            tenantId: tenant.id
+          }
+        },
+        update: {}, // No update needed
+        create: {
+          walletAddress: wallet,
+          tenantId: tenant.id,
+          points: 0
+        }
+      }),
+      { maxRetries: 1, timeout: 2000 }
+    );
+
+    // Step 3: Determine userType
+    let userType: "host" | "co-host" | "guest";
+    if (user.id === existingStream.userId) {
+      userType = "host";
+    } else if (existingStream.streamSessionType === StreamSessionType.Meeting) {
+      userType = "co-host";
+    } else {
+      userType = "guest";
+    }
+
+    // Step 4: Check access permissions
+    if (!existingStream.isPublic && userType === "guest") {
       return res.status(403).json({ error: "This stream requires permission to join" });
     }
 
-    if (userType === "guest" && !streamData.hasHost) {
+    if (userType === "guest" && !existingStream.hasHost) {
       return res.status(403).json({ error: "Waiting for host to join" });
     }
 
-    // Upsert participant
+    // Step 5: Upsert participant (atomic) with timeout
     const participant = await executeQuery(
       () => db.participant.upsert({
         where: {
           walletAddress_streamId_tenantId: {
             walletAddress: wallet,
-            streamId: streamData.id,
+            streamId: existingStream.id,
             tenantId: tenant.id
           }
         },
         update: {
           userName,
           userType,
-          leftAt: null,
+          leftAt: null, // Mark as rejoined
           version: { increment: 1 },
           ...(avatarUrl && { avatarUrl })
         },
@@ -561,35 +374,42 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
           userName,
           walletAddress: wallet,
           userType,
-          streamId: streamData.id,
+          streamId: existingStream.id,
           tenantId: tenant.id,
           totalPoints: 0,
           ...(avatarUrl && { avatarUrl })
         }
       }),
-      { maxRetries: 1, timeout: 2000 }
+      { maxRetries: 1, timeout: 3000 }
     );
 
-    if (!participant) {
-      return res.status(500).json({ error: "Failed to create/update participant" });
-    }
-
-    // Update stream status asynchronously if host (don't wait)
-    if (userType === "host" && !streamData.hasHost) {
+    // Step 6: Update stream if host joins (separate operation, can retry)
+    if (userType === "host" && !existingStream.hasHost) {
+      // Fire and forget - don't wait
       executeQuery(
-        () => db.stream.update({
-          where: { id: streamData.id },
+        () => db.stream.updateMany({
+          where: { 
+            id: existingStream.id,
+            hasHost: false // Only update if still false
+          },
           data: {
             hasHost: true,
             isLive: true,
-            startedAt: streamData.startedAt || new Date()
-          }
+            startedAt: existingStream.startedAt || new Date(),
+            version: { increment: 1 }
+          },
         }),
-        { maxRetries: 1, timeout: 2000 }
-      ).catch(err => console.log('Non-critical: Stream status update failed'));
+        { maxRetries: 2, timeout: 3000 }
+      ).catch(err => {
+        console.error(`Failed to update stream status: ${err.message}`);
+        // Non-critical - stream will function anyway
+      });
+      
+      // Invalidate cache
+      streamCache.delete(cacheKey);
     }
 
-    // Generate token
+    // Step 7: Generate token
     const accessToken = new AccessToken(
       process.env.LIVEKIT_API_KEY!,
       process.env.LIVEKIT_API_SECRET!,
@@ -617,8 +437,11 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
 
     const token = await accessToken.toJwt();
     
-    return res.status(200).json({ token, userType });
+    success = true;
     
+    if (!res.headersSent && !abortController?.signal?.aborted) {
+      return res.status(200).json({ token, userType });
+    }
   } catch (error: any) {
     console.error("Error creating token:", error);
     
@@ -631,7 +454,13 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
       });
     }
     
+    if (error.message?.includes("permission") || error.message?.includes("Waiting for host")) {
+      return res.status(403).json({ error: error.message });
+    }
+    
     return res.status(500).json({ error: "Internal server error" });
+  } finally {
+    trackQuery(success);
   }
 };
 
