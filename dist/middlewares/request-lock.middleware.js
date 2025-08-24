@@ -6,9 +6,9 @@ export function requestLockMiddleware(req, res, next) {
     const originalJson = res.json;
     const originalSend = res.send;
     const originalEnd = res.end;
-    console.log("Request Lock Middleware Initialized", startTime);
     // Wrap res.json
     res.json = function (body) {
+        console.log("Request Lock Middleware Initialized", startTime);
         if (responseSent) {
             console.error(`[DUPLICATE] res.json called after response sent for ${req.method} ${req.path} at ${Date.now() - startTime}ms`);
             console.trace();
@@ -45,13 +45,13 @@ export function requestLockMiddleware(req, res, next) {
     };
     // Clear timeout when response is sent
     res.on('finish', () => {
+        console.log("Request Lock Middleware ended", Date.now());
         const timeoutHandle = req.timeoutHandle;
         if (timeoutHandle) {
             clearTimeout(timeoutHandle);
             req.timeoutHandle = null;
         }
     });
-    console.log("Request Lock Middleware ended", Date.now());
     next();
 }
 /**
