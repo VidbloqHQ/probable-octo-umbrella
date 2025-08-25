@@ -277,6 +277,7 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
     if (res.headersSent || abortController?.signal?.aborted) {
       return;
     }
+    console.time('validation');
 
     if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
@@ -287,11 +288,16 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
         error: "Missing or invalid required fields",
       });
     }
+    console.timeEnd('validation');
+
 
     // Step 1: Get stream (with caching and timeout)
+    console.time('cache-check');
     const cacheKey = `${tenant.id}:${roomName}`;
     let existingStream = streamCache.get(cacheKey)?.data;
+    console.timeEnd('cache-check');
     
+    console.time('stream-fetch');
     if (!existingStream || Date.now() - streamCache.get(cacheKey)!.timestamp > STREAM_CACHE_TTL) {
       existingStream = await executeQuery(
         () => db.stream.findFirst({
@@ -311,12 +317,14 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
       streamCache.set(cacheKey, { data: existingStream, timestamp: Date.now() });
     }
 
+    console.timeEnd('stream-fetch');
     // Check abort before continuing
     if (res.headersSent || abortController?.signal?.aborted) {
       return;
     }
 
     // Step 2: Upsert user (atomic) with timeout
+    console.time('user-upsert');
     const user = await executeQuery(
       () => db.user.upsert({
         where: {
@@ -334,6 +342,7 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
       }),
       { maxRetries: 1, timeout: 2000 }
     );
+    console.timeEnd('user-upsert');
 
     // Step 3: Determine userType
     let userType: "host" | "co-host" | "guest";
@@ -355,6 +364,7 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
     }
 
     // Step 5: Upsert participant (atomic) with timeout
+     console.time('participant-upsert');
     const participant = await executeQuery(
       () => db.participant.upsert({
         where: {
@@ -383,11 +393,13 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
       }),
       { maxRetries: 1, timeout: 3000 }
     );
+    console.timeEnd('participant-upsert');
 
     // Step 6: Update stream if host joins (separate operation, can retry)
+    console.time('stream-update');
     if (userType === "host" && !existingStream.hasHost) {
       // Fire and forget - don't wait
-      executeQuery(
+      await executeQuery(
         () => db.stream.updateMany({
           where: { 
             id: existingStream.id,
@@ -409,8 +421,10 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
       // Invalidate cache
       streamCache.delete(cacheKey);
     }
+console.timeEnd('stream-update');
 
     // Step 7: Generate token
+    console.time('token-generation');
     const accessToken = new AccessToken(
       process.env.LIVEKIT_API_KEY!,
       process.env.LIVEKIT_API_SECRET!,
@@ -437,13 +451,16 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
     });
 
     const token = await accessToken.toJwt();
-    
+    console.timeEnd('token-generation');
+
     success = true;
     
     if (!res.headersSent && !abortController?.signal?.aborted) {
-      console.log("end time", userName, Date.now());
+      console.time('response-send');
       return res.status(200).json({ token, userType });
     }
+    console.timeEnd('response-send');
+    console.log("end time", userName, Date.now());
   } catch (error: any) {
     console.error("Error creating token:", error);
     
