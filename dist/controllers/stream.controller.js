@@ -336,9 +336,15 @@ export const createStreamToken = async (req, res) => {
         const token = await accessToken.toJwt();
         console.timeEnd('token-generation');
         success = true;
+        res.on('finish', () => {
+            console.log(`Response finished for ${userName}`);
+        });
+        res.on('close', () => {
+            console.log(`Connection closed for ${userName}`);
+        });
         if (!res.headersSent && !abortController?.signal?.aborted) {
             console.time('response-send');
-            return res.status(200).json({ token, userType });
+            res.status(200).json({ token, userType });
         }
         console.timeEnd('response-send');
         console.log("end time", userName, Date.now());
