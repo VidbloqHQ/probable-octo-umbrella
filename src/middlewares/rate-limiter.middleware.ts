@@ -189,6 +189,9 @@ function getRateLimitTier(req: Request): string {
  */
 export function createRateLimiter(tier?: keyof typeof RATE_LIMIT_TIERS) {
   return async (req: Request, res: Response, next: NextFunction) => {
+    if (req.path === '/stream/token' || req.path === '/stream/token-direct') {
+      return next();
+    }
     // If Redis is not available and we're in production, be more lenient
     if (!isRedisAvailable() && process.env.NODE_ENV === 'production') {
       // Only apply basic in-memory rate limiting for critical endpoints

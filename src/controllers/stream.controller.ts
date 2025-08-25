@@ -464,7 +464,7 @@ res.on('close', () => {
     
     if (!res.headersSent && !abortController?.signal?.aborted) {
       console.time('response-send');
-       res.status(200).json({ token, userType });
+      return res.status(200).json({ token, userType });
     }
     console.timeEnd('response-send');
     console.log("end time", userName, Date.now());

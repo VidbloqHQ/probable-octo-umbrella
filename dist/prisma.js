@@ -9,7 +9,7 @@ const prismaClientSingleton = () => {
     if (!databaseUrl.includes('pgbouncer=true')) {
         const separator = databaseUrl.includes('?') ? '&' : '?';
         // REDUCED statement_timeout from 30000 to 10000
-        databaseUrl = `${databaseUrl}${separator}pgbouncer=true&connection_limit=10&pool_timeout=10&statement_timeout=10000`;
+        databaseUrl = `${databaseUrl}${separator}pgbouncer=true&connection_limit=25&pool_timeout=10&statement_timeout=10000`;
     }
     console.log('Initializing Prisma Client', {
         environment: process.env.NODE_ENV || 'development',
@@ -87,7 +87,7 @@ class QueryQueue {
 const queryQueue = new QueryQueue();
 // CRITICAL: Wrapper for queries with connection pool management
 export async function executeQuery(queryFn, options = {}) {
-    const { maxRetries = 2, timeout = 5000, // Default 5 seconds
+    const { maxRetries = 2, timeout = 10000, // Default 10 seconds
     retryDelay = 500 } = options;
     // Use the queue to limit concurrent queries
     return queryQueue.execute(async () => {

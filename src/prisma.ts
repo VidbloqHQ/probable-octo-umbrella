@@ -13,7 +13,7 @@ const prismaClientSingleton = () => {
   if (!databaseUrl.includes('pgbouncer=true')) {
     const separator = databaseUrl.includes('?') ? '&' : '?';
     // REDUCED statement_timeout from 30000 to 10000
-    databaseUrl = `${databaseUrl}${separator}pgbouncer=true&connection_limit=10&pool_timeout=10&statement_timeout=10000`;
+    databaseUrl = `${databaseUrl}${separator}pgbouncer=true&connection_limit=25&pool_timeout=10&statement_timeout=10000`;
   }
   
   console.log('Initializing Prisma Client', {
@@ -109,7 +109,7 @@ export async function executeQuery<T>(
 ): Promise<T> {
   const { 
     maxRetries = 2,
-    timeout = 5000, // Default 5 seconds
+    timeout = 10000, // Default 10 seconds
     retryDelay = 500
   } = options;
 
