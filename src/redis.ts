@@ -2,8 +2,12 @@ import Redis from 'ioredis';
 
 // Redis Cloud configuration from your dashboard
 const REDIS_CONFIG = {
-  host: process.env.REDIS_HOST || 'redis-12652.c341.af-south-1-1.ec2.redns.redis-cloud.com',
-  port: parseInt(process.env.REDIS_PORT || '12652'),
+  // host: process.env.REDIS_HOST || 'redis-12652.c341.af-south-1-1.ec2.redns.redis-cloud.com',
+  // port: parseInt(process.env.REDIS_PORT || '12652'),
+  // username: process.env.REDIS_USERNAME || 'default',
+  // password: process.env.REDIS_PASSWORD || '', // You need to add your actual password
+  host: process.env.REDIS_HOST || 'redis-10683.c256.us-east-1-2.ec2.redns.redis-cloud.com',
+  port: parseInt(process.env.REDIS_PORT || '10683'),
   username: process.env.REDIS_USERNAME || 'default',
   password: process.env.REDIS_PASSWORD || '', // You need to add your actual password
 };

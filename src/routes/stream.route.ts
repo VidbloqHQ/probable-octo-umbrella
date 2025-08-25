@@ -15,8 +15,8 @@ import { singletonController } from "../utils/singleton-controller.js";
 const router = express.Router();
 
 router.post("/", singletonController('createStream', createStream));
-// router.post("/token", singletonController('createStreamToken', createStreamToken));
-router.post("/token", createStreamToken);
+router.post("/token", singletonController('createStreamToken', createStreamToken));
+// router.post("/token", createStreamToken);
 router.get("/:streamId", singletonController('getStream', getStream));
 router.put("/:streamId", singletonController('updateStream', updateStream));
 router.post("/record", singletonController('recordStream', recordStream));
