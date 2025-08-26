@@ -944,7 +944,7 @@ app.use(timeoutMiddleware(MAX_REQUEST_TIMEOUT));
 // ============================================
 // DATABASE CLEANUP FOR CRITICAL PATHS
 // ============================================
-app.use(dbCleanupMiddleware);
+// app.use(dbCleanupMiddleware);
 
 // ============================================
 // REQUEST LOGGING (OPTIONAL)

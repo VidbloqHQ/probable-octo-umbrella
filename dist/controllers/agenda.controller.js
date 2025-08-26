@@ -248,195 +248,245 @@ export const createAgenda = async (req, res) => {
 /**
  * Controller for getting all stream's agendas - OPTIMIZED VERSION
  */
+// export const getStreamAgenda = async (
+//   req: TenantRequest,
+//   res: Response
+// ) => {
+//   const { streamId } = req.params;
+//   const tenant = req.tenant;
+//   let success = false;
+//   // Add query parameters for pagination
+//   const page = parseInt(req.query.page as string) || 1;
+//   const limit = Math.min(parseInt(req.query.limit as string) || 20, 50); // Max 50 items
+//   const skip = (page - 1) * limit;
+//   // GUARD 1: Check request lock
+//   const lock = (req as any).requestLock;
+//   if (lock && lock.completed) {
+//     console.log(`[getStreamAgenda] Request already completed for ${streamId}`);
+//     return;
+//   }
+//   try {
+//     // GUARD 2: Check if response already sent
+//     if (res.headersSent) {
+//       console.log(`[getStreamAgenda] Headers already sent for ${streamId}`);
+//       return;
+//     }
+//     // GUARD 3: Check abort signal
+//     const abortController = (req as any).abortController;
+//     if (abortController?.signal?.aborted) {
+//       console.log(`[getStreamAgenda] Request aborted for ${streamId}`);
+//       return;
+//     }
+//     // VALIDATION WITH IMMEDIATE RETURNS
+//     if (!tenant) {
+//       if (!res.headersSent && (!lock || !lock.completed)) {
+//         return res.status(401).json({ error: "Tenant authentication required." });
+//       }
+//       return;
+//     }
+//     if (!streamId) {
+//       if (!res.headersSent && (!lock || !lock.completed)) {
+//         return res.status(400).json({ error: "Missing livestream ID" });
+//       }
+//       return;
+//     }
+//     // CHECK BEFORE ASYNC OPERATION
+//     if (res.headersSent || (lock && lock.completed) || abortController?.signal?.aborted) {
+//       console.log(`[getStreamAgenda] Aborted before query for ${streamId}`);
+//       return;
+//     }
+//     // OPTIMIZED DATABASE QUERY - Split into two queries
+//     // First, get the stream to verify it exists
+//     const stream = await executeQuery(
+//       () => db.stream.findFirst({
+//         where: {
+//           name: streamId,
+//           tenantId: tenant.id,
+//         },
+//         select: {
+//           id: true,
+//           name: true
+//         }
+//       }),
+//       { maxRetries: 1, timeout: 2000 }
+//     );
+//     if (!stream) {
+//       if (!res.headersSent && (!lock || !lock.completed)) {
+//         return res.status(404).json({ error: "Stream not found in your tenant" });
+//       }
+//       return;
+//     }
+//     // CHECK AFTER FIRST QUERY
+//     if (res.headersSent || (lock && lock.completed) || abortController?.signal?.aborted) {
+//       console.log(`[getStreamAgenda] Aborted after stream check for ${streamId}`);
+//       return;
+//     }
+//     // Second, get agendas with pagination and selective loading
+//     const [agendas, totalCount] = await Promise.all([
+//       executeQuery(
+//         () => db.agenda.findMany({
+//           where: {
+//             streamId: stream.id
+//           },
+//           select: {
+//             id: true,
+//             streamId: true,
+//             timeStamp: true,
+//             action: true,
+//             title: true,
+//             description: true,
+//             duration: true,
+//             isCompleted: true,
+//             // Only include basic content info, not full content
+//             pollContent: {
+//               select: {
+//                 id: true,
+//                 options: true,
+//                 totalVotes: true
+//               }
+//             },
+//             quizContent: {
+//               select: {
+//                 id: true,
+//                 // Don't include questions in list view
+//                 _count: {
+//                   select: { questions: true }
+//                 }
+//               }
+//             },
+//             qaContent: {
+//               select: {
+//                 id: true,
+//                 topic: true
+//               }
+//             },
+//             customContent: {
+//               select: {
+//                 id: true
+//               }
+//             },
+//             // Count responses instead of fetching them
+//             _count: {
+//               select: { participantResponses: true }
+//             }
+//           },
+//           orderBy: {
+//             timeStamp: 'asc'
+//           },
+//           skip: skip,
+//           take: limit
+//         }),
+//         { maxRetries: 1, timeout: 3000 }
+//       ),
+//       executeQuery(
+//         () => db.agenda.count({
+//           where: {
+//             streamId: stream.id
+//           }
+//         }),
+//         { maxRetries: 1, timeout: 2000 }
+//       )
+//     ]);
+//     // CHECK AFTER ASYNC OPERATION
+//     if (res.headersSent || (lock && lock.completed) || abortController?.signal?.aborted) {
+//       console.log(`[getStreamAgenda] Aborted after query for ${streamId}`);
+//       return;
+//     }
+//     success = true;
+//     // FINAL SEND WITH MULTIPLE GUARDS
+//     if (!res.headersSent && (!lock || !lock.completed) && !abortController?.signal?.aborted) {
+//       // Mark as sending
+//       if (lock) {
+//         lock.completed = true;
+//       }
+//       // Send response with pagination info
+//       return res.status(200).json({
+//         agendas: agendas.map(agenda => ({
+//           ...agenda,
+//           responsesCount: agenda._count.participantResponses,
+//           questionsCount: agenda.quizContent?._count?.questions || 0
+//         })),
+//         pagination: {
+//           page,
+//           limit,
+//           total: totalCount,
+//           totalPages: Math.ceil(totalCount / limit)
+//         }
+//       });
+//     } else {
+//       console.log(`[getStreamAgenda] Response already sent or locked, skipping final send`);
+//     }
+//     return;
+//   } catch (error: any) {
+//     console.error("Error fetching agendas:", error);
+//     // GUARD ERROR RESPONSE
+//     if (res.headersSent || (lock && lock.completed)) {
+//       console.log(`[getStreamAgenda] Error after response sent/locked`);
+//       return;
+//     }
+//     const abortController = (req as any).abortController;
+//     if (abortController?.signal?.aborted) {
+//       console.log(`[getStreamAgenda] Error after abort`);
+//       return;
+//     }
+//     // Send error only if not sent
+//     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+//       if (!res.headersSent && (!lock || !lock.completed)) {
+//         return res.status(504).json({ 
+//           error: "Database query timeout",
+//           message: "The request took too long. Please try again."
+//         });
+//       }
+//     } else {
+//       if (!res.headersSent && (!lock || !lock.completed)) {
+//         return res.status(500).json({ error: "Internal server error" });
+//       }
+//     }
+//     return;
+//   } finally {
+//     trackQuery(success);
+//   }
+// };
 export const getStreamAgenda = async (req, res) => {
     const { streamId } = req.params;
     const tenant = req.tenant;
-    let success = false;
-    // Add query parameters for pagination
-    const page = parseInt(req.query.page) || 1;
-    const limit = Math.min(parseInt(req.query.limit) || 20, 50); // Max 50 items
-    const skip = (page - 1) * limit;
-    // GUARD 1: Check request lock
-    const lock = req.requestLock;
-    if (lock && lock.completed) {
-        console.log(`[getStreamAgenda] Request already completed for ${streamId}`);
-        return;
+    if (!tenant || !streamId) {
+        return res.status(400).json({ error: "Missing required fields" });
     }
     try {
-        // GUARD 2: Check if response already sent
-        if (res.headersSent) {
-            console.log(`[getStreamAgenda] Headers already sent for ${streamId}`);
-            return;
-        }
-        // GUARD 3: Check abort signal
-        const abortController = req.abortController;
-        if (abortController?.signal?.aborted) {
-            console.log(`[getStreamAgenda] Request aborted for ${streamId}`);
-            return;
-        }
-        // VALIDATION WITH IMMEDIATE RETURNS
-        if (!tenant) {
-            if (!res.headersSent && (!lock || !lock.completed)) {
-                return res.status(401).json({ error: "Tenant authentication required." });
-            }
-            return;
-        }
-        if (!streamId) {
-            if (!res.headersSent && (!lock || !lock.completed)) {
-                return res.status(400).json({ error: "Missing livestream ID" });
-            }
-            return;
-        }
-        // CHECK BEFORE ASYNC OPERATION
-        if (res.headersSent || (lock && lock.completed) || abortController?.signal?.aborted) {
-            console.log(`[getStreamAgenda] Aborted before query for ${streamId}`);
-            return;
-        }
-        // OPTIMIZED DATABASE QUERY - Split into two queries
-        // First, get the stream to verify it exists
-        const stream = await executeQuery(() => db.stream.findFirst({
+        // Simple, direct query - no complex guards
+        const stream = await db.stream.findFirst({
             where: {
                 name: streamId,
                 tenantId: tenant.id,
             },
             select: {
                 id: true,
-                name: true
+                agenda: {
+                    select: {
+                        id: true,
+                        timeStamp: true,
+                        action: true,
+                        title: true,
+                        description: true,
+                        duration: true,
+                        isCompleted: true
+                    },
+                    orderBy: {
+                        timeStamp: 'asc'
+                    },
+                    take: 50
+                }
             }
-        }), { maxRetries: 1, timeout: 2000 });
+        });
         if (!stream) {
-            if (!res.headersSent && (!lock || !lock.completed)) {
-                return res.status(404).json({ error: "Stream not found in your tenant" });
-            }
-            return;
+            return res.status(404).json({ error: "Stream not found" });
         }
-        // CHECK AFTER FIRST QUERY
-        if (res.headersSent || (lock && lock.completed) || abortController?.signal?.aborted) {
-            console.log(`[getStreamAgenda] Aborted after stream check for ${streamId}`);
-            return;
-        }
-        // Second, get agendas with pagination and selective loading
-        const [agendas, totalCount] = await Promise.all([
-            executeQuery(() => db.agenda.findMany({
-                where: {
-                    streamId: stream.id
-                },
-                select: {
-                    id: true,
-                    streamId: true,
-                    timeStamp: true,
-                    action: true,
-                    title: true,
-                    description: true,
-                    duration: true,
-                    isCompleted: true,
-                    // Only include basic content info, not full content
-                    pollContent: {
-                        select: {
-                            id: true,
-                            options: true,
-                            totalVotes: true
-                        }
-                    },
-                    quizContent: {
-                        select: {
-                            id: true,
-                            // Don't include questions in list view
-                            _count: {
-                                select: { questions: true }
-                            }
-                        }
-                    },
-                    qaContent: {
-                        select: {
-                            id: true,
-                            topic: true
-                        }
-                    },
-                    customContent: {
-                        select: {
-                            id: true
-                        }
-                    },
-                    // Count responses instead of fetching them
-                    _count: {
-                        select: { participantResponses: true }
-                    }
-                },
-                orderBy: {
-                    timeStamp: 'asc'
-                },
-                skip: skip,
-                take: limit
-            }), { maxRetries: 1, timeout: 3000 }),
-            executeQuery(() => db.agenda.count({
-                where: {
-                    streamId: stream.id
-                }
-            }), { maxRetries: 1, timeout: 2000 })
-        ]);
-        // CHECK AFTER ASYNC OPERATION
-        if (res.headersSent || (lock && lock.completed) || abortController?.signal?.aborted) {
-            console.log(`[getStreamAgenda] Aborted after query for ${streamId}`);
-            return;
-        }
-        success = true;
-        // FINAL SEND WITH MULTIPLE GUARDS
-        if (!res.headersSent && (!lock || !lock.completed) && !abortController?.signal?.aborted) {
-            // Mark as sending
-            if (lock) {
-                lock.completed = true;
-            }
-            // Send response with pagination info
-            return res.status(200).json({
-                agendas: agendas.map(agenda => ({
-                    ...agenda,
-                    responsesCount: agenda._count.participantResponses,
-                    questionsCount: agenda.quizContent?._count?.questions || 0
-                })),
-                pagination: {
-                    page,
-                    limit,
-                    total: totalCount,
-                    totalPages: Math.ceil(totalCount / limit)
-                }
-            });
-        }
-        else {
-            console.log(`[getStreamAgenda] Response already sent or locked, skipping final send`);
-        }
-        return;
+        return res.status(200).json({ agendas: stream.agenda });
     }
     catch (error) {
         console.error("Error fetching agendas:", error);
-        // GUARD ERROR RESPONSE
-        if (res.headersSent || (lock && lock.completed)) {
-            console.log(`[getStreamAgenda] Error after response sent/locked`);
-            return;
-        }
-        const abortController = req.abortController;
-        if (abortController?.signal?.aborted) {
-            console.log(`[getStreamAgenda] Error after abort`);
-            return;
-        }
-        // Send error only if not sent
-        if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-            if (!res.headersSent && (!lock || !lock.completed)) {
-                return res.status(504).json({
-                    error: "Database query timeout",
-                    message: "The request took too long. Please try again."
-                });
-            }
-        }
-        else {
-            if (!res.headersSent && (!lock || !lock.completed)) {
-                return res.status(500).json({ error: "Internal server error" });
-            }
-        }
-        return;
-    }
-    finally {
-        trackQuery(success);
+        return res.status(500).json({ error: "Internal server error" });
     }
 };
 /**
