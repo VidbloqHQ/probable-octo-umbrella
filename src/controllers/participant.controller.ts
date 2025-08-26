@@ -244,6 +244,28 @@ export const getStreamParticipants = async (
   }
 };
 
+// TEST VERSION - Direct response without caching or serialization
+export const getStreamParticipantsTest = async (req: TenantRequest, res: Response) => {
+  const { streamId } = req.params;
+  const tenant = req.tenant;
+  
+  if (!tenant || !streamId) {
+    return res.status(400).json({ error: "Bad request" });
+  }
+  
+  const participants = await db.participant.findMany({
+    where: {
+      stream: {
+        name: streamId,
+        tenantId: tenant.id
+      }
+    },
+    take: 50
+  });
+  
+  return res.json({ participants });
+};
+
 /**
  * Controller for updating participant permissions - FIXED
  */
