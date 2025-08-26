@@ -1,12 +1,12 @@
 import express from "express";
-import { updateParticipantLeftTime, updateParticipantPermissions, getParticipantScores, getStreamParticipantsTest,
+import { getStreamParticipants, updateParticipantLeftTime, updateParticipantPermissions, getParticipantScores,
 // handleWebSocketDisconnect
  } from "../controllers/participant.controller.js";
 // import { safeController } from "../middlewares/request-lock.middleware.js";
 import { singletonController } from "../utils/singleton-controller.js";
 const router = express.Router();
 // router.get("/:streamId", singletonController('getStreamParticipants', getStreamParticipants));
-router.get("/:streamId", getStreamParticipantsTest);
+router.get("/:streamId", getStreamParticipants);
 router.put("/:streamId", singletonController('updateParticipantLeftTime', updateParticipantLeftTime));
 router.post("/:streamId", singletonController('updateParticipantLeftTime', updateParticipantLeftTime));
 router.post("/update/permission", singletonController('updateParticipantPermissions', updateParticipantPermissions));
