@@ -123,6 +123,7 @@ const PARTICIPANT_CACHE_TTL = 30000; // 30 seconds
 //   }
 // };
 export const getStreamParticipants = async (req, res) => {
+    console.log('[DEBUG] Using OPTIMIZED getStreamParticipants with raw SQL');
     if (res.headersSent) {
         return;
     }

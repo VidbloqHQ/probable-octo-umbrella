@@ -519,6 +519,7 @@ export const getStreamAgenda = async (req, res) => {
 //   }
 // };
 export const getAgendaDetails = async (req, res) => {
+    console.log('[DEBUG] Using OPTIMIZED getAgendaDetails with raw SQL');
     const { agendaId } = req.params;
     const tenant = req.tenant;
     let success = false;
@@ -1064,6 +1065,53 @@ export const getAgenda = async (req, res) => {
     catch (error) {
         console.error("Error fetching agenda:", error);
         return res.status(500).json({ error: "Internal server error" });
+    }
+};
+// In agenda.controller.ts - add this SIMPLER version
+export const getAgendaById = async (req, res) => {
+    const { agendaId } = req.params;
+    const tenant = req.tenant;
+    let success = false;
+    try {
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        // MUCH SIMPLER QUERY - just get the agenda with basic content
+        const agenda = await executeQuery(() => db.agenda.findFirst({
+            where: {
+                id: agendaId,
+                tenantId: tenant.id,
+            },
+            include: {
+                // Only include the content that exists, not all types
+                pollContent: true,
+                qaContent: true,
+                customContent: true,
+                // For quiz, just get the count
+                quizContent: {
+                    include: {
+                        _count: {
+                            select: { questions: true }
+                        }
+                    }
+                }
+            }
+        }), { maxRetries: 1, timeout: 1000 } // Aggressive timeout
+        );
+        if (!agenda) {
+            return res.status(404).json({
+                error: "Agenda not found"
+            });
+        }
+        success = true;
+        return res.status(200).json(agenda);
+    }
+    catch (error) {
+        console.error("Error fetching agenda:", error);
+        return res.status(500).json({ error: "Internal server error" });
+    }
+    finally {
+        trackQuery(success);
     }
 };
 /**

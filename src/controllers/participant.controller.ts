@@ -155,6 +155,8 @@ export const getStreamParticipants = async (
   req: TenantRequest,
   res: Response
 ) => {
+  console.log('[DEBUG] Using OPTIMIZED getStreamParticipants with raw SQL');
+
   if (res.headersSent) {
     return;
   }

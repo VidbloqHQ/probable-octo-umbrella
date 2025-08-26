@@ -33,10 +33,15 @@ const RATE_LIMIT_TIERS = {
         blockDuration: 300, // 5 minutes
     },
     // Stream creation (expensive operation)
+    // streamCreate: {
+    //   points: 5,
+    //   duration: 300, // 5 per 5 minutes
+    //   blockDuration: 300,
+    // },
     streamCreate: {
-        points: 5,
-        duration: 300, // 5 per 5 minutes
-        blockDuration: 300,
+        points: 20, // Allow more during testing
+        duration: 60, // Per minute
+        blockDuration: 30,
     },
     // Bulk operations
     bulk: {
