@@ -58,7 +58,7 @@ connectWithRetry().catch(error => {
 class QueryQueue {
     queue = [];
     activeQueries = 0;
-    maxConcurrent = 8; // Reduced from 15 to prevent exhaustion
+    maxConcurrent = 15; // Reduced from 15 to prevent exhaustion
     async execute(fn) {
         while (this.activeQueries >= this.maxConcurrent) {
             await new Promise(resolve => {

@@ -78,6 +78,310 @@ async function getAuthorizationData(
 /**
  * Controller for creating agenda items - FIXED
  */
+// export const createAgenda = async (req: TenantRequest, res: Response) => {
+//   const { streamId } = req.params; 
+//   const { agendas, wallet } = req.body;
+//   const tenant = req.tenant;
+//   let success = false;
+
+//   try {
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });
+//     }
+
+//     if (!streamId || !agendas || !wallet) {
+//       return res.status(400).json({ 
+//         error: "Missing required fields: streamId, agendas, or wallet" 
+//       });
+//     }
+
+//     if (!isValidWalletAddress(wallet)) {
+//       return res.status(400).json({ error: "Invalid wallet address format." });
+//     }
+
+//     // Get authorization data with timeout
+//     const authData = await Promise.race([
+//       getAuthorizationData(streamId, wallet, tenant.id),
+//       new Promise((_, reject) => 
+//         setTimeout(() => reject(new Error('Authorization timeout')), 5000)
+//       )
+//     ]) as any;
+
+//     const { stream, requestingUser } = authData;
+
+//     if (!stream) {
+//       return res.status(404).json({ 
+//         error: "Stream not found",
+//         details: `Stream ${streamId} not found`
+//       });
+//     }
+
+//     if (!requestingUser) {
+//       return res.status(403).json({ error: "User not authorized." });
+//     }
+
+//     // Check permissions
+//     const isHost = requestingUser.id === stream.userId;
+//     const isCoHost = stream.participants && stream.participants.length > 0;
+
+//     if (!isHost && !isCoHost) {
+//       return res.status(403).json({ 
+//         error: "Only hosts and co-hosts can create agendas",
+//         requiredRole: "host or co-host"
+//       });
+//     }
+
+//     // Create agendas individually with timeout handling
+//     const createdAgendas: any[] = [];
+//     const failedAgendas: any[] = [];
+
+//     for (const [index, agenda] of agendas.entries()) {
+//       try {
+//         // Validate agenda
+//         if (typeof agenda.timeStamp !== 'number' || agenda.timeStamp < 0) {
+//           throw new Error(`Invalid timeStamp (must be positive number)`);
+//         }
+
+//         if (!agenda.action || !Object.values(AgendaAction).includes(agenda.action as any)) {
+//           throw new Error(`Invalid action type`);
+//         }
+
+//         const actionEnum = agenda.action as AgendaAction;
+
+//         // Base agenda data
+//         const baseAgendaData = {
+//           streamId: stream.id,
+//           timeStamp: agenda.timeStamp,
+//           action: actionEnum,
+//           title: agenda.title || null,
+//           description: agenda.description || null,
+//           duration: agenda.duration || null,
+//           tenantId: tenant.id,
+//         };
+
+//         let createdAgenda: any;
+
+//         // Create based on type with timeout
+//         switch (actionEnum) {
+//           case AgendaAction.Poll:
+//             if (!agenda.options || !Array.isArray(agenda.options) || agenda.options.length < 2) {
+//               throw new Error(`Poll requires at least 2 options`);
+//             }
+
+//             // Create agenda first
+//             createdAgenda = await executeQuery(
+//               () => db.agenda.create({
+//                 data: baseAgendaData,
+//                 include: { pollContent: true }
+//               }),
+//               { maxRetries: 1, timeout: 3000 }
+//             );
+
+//             // Then create poll content
+//             await executeQuery(
+//               () => db.pollContent.create({
+//                 data: {
+//                   agendaId: createdAgenda.id,
+//                   options: agenda.options,
+//                   totalVotes: 0
+//                 }
+//               }),
+//               { maxRetries: 1, timeout: 3000 }
+//             );
+//             break;
+
+//           case AgendaAction.Quiz:
+//             if (!agenda.questions || !Array.isArray(agenda.questions) || agenda.questions.length < 1) {
+//               throw new Error(`Quiz requires at least 1 question`);
+//             }
+
+//             // Create agenda first
+//             createdAgenda = await executeQuery(
+//               () => db.agenda.create({
+//                 data: baseAgendaData,
+//                 include: { quizContent: true }
+//               }),
+//               { maxRetries: 1, timeout: 3000 }
+//             );
+
+//             // Create quiz content
+//             const quizContent = await executeQuery(
+//               () => db.quizContent.create({
+//                 data: {
+//                   agendaId: createdAgenda.id
+//                 }
+//               }),
+//               { maxRetries: 1, timeout: 3000 }
+//             );
+
+//             // Create questions individually with timeout
+//             for (const question of agenda.questions.slice(0, 10)) { // Limit to 10 questions
+//               await executeQuery(
+//                 () => db.quizQuestion.create({
+//                   data: {
+//                     quizContentId: quizContent.id,
+//                     questionText: question.questionText,
+//                     options: question.options,
+//                     correctAnswer: question.correctAnswer,
+//                     isMultiChoice: question.isMultiChoice ?? true,
+//                     points: question.points ?? 1
+//                   }
+//                 }),
+//                 { maxRetries: 1, timeout: 2000 }
+//               ).catch(err => {
+//                 console.error(`Failed to create quiz question: ${err.message}`);
+//               });
+//             }
+//             break;
+
+//           case AgendaAction.Q_A:
+//             createdAgenda = await executeQuery(
+//               () => db.agenda.create({
+//                 data: baseAgendaData,
+//                 include: { qaContent: true }
+//               }),
+//               { maxRetries: 1, timeout: 3000 }
+//             );
+
+//             await executeQuery(
+//               () => db.qAContent.create({
+//                 data: {
+//                   agendaId: createdAgenda.id,
+//                   topic: agenda.topic || agenda.title || null
+//                 }
+//               }),
+//               { maxRetries: 1, timeout: 3000 }
+//             );
+//             break;
+
+//           case AgendaAction.Custom:
+//           default:
+//             createdAgenda = await executeQuery(
+//               () => db.agenda.create({
+//                 data: baseAgendaData,
+//                 include: { customContent: true }
+//               }),
+//               { maxRetries: 1, timeout: 3000 }
+//             );
+
+//             await executeQuery(
+//               () => db.customContent.create({
+//                 data: {
+//                   agendaId: createdAgenda.id,
+//                   customData: agenda.customData || {}
+//                 }
+//               }),
+//               { maxRetries: 1, timeout: 3000 }
+//             );
+//             break;
+//         }
+
+//         // Fetch complete agenda with all relations
+//         const completeAgenda = await executeQuery(
+//           () => db.agenda.findUnique({
+//             where: { id: createdAgenda.id },
+//             include: {
+//               pollContent: true,
+//               quizContent: {
+//                 include: { 
+//                   questions: {
+//                     take: 10 // Limit questions
+//                   } 
+//                 }
+//               },
+//               qaContent: true,
+//               customContent: true
+//             }
+//           }),
+//           { maxRetries: 1, timeout: 3000 }
+//         );
+
+//         createdAgendas.push(completeAgenda);
+//       } catch (error: any) {
+//         console.error(`Failed to create agenda ${index + 1}:`, error);
+        
+//         if (error.message === 'Query timeout') {
+//           // If we timeout, stop creating more agendas
+//           failedAgendas.push({
+//             index,
+//             error: 'Database timeout - please try again with fewer agendas'
+//           });
+//           break;
+//         }
+        
+//         failedAgendas.push({
+//           index,
+//           error: error.message
+//         });
+//       }
+//     }
+
+//     // Return appropriate response
+//     if (createdAgendas.length === 0) {
+//       return res.status(400).json({
+//         error: "Failed to create any agendas",
+//         failures: failedAgendas
+//       });
+//     }
+
+//     if (failedAgendas.length > 0) {
+//       // Partial success
+//       success = true;
+//       return res.status(207).json({
+//         created: createdAgendas,
+//         failed: failedAgendas,
+//         message: `Created ${createdAgendas.length} of ${agendas.length} agendas`
+//       });
+//     }
+
+//     // Complete success
+//     success = true;
+//     return res.status(201).json(createdAgendas);
+
+//   } catch (error: any) {
+//     console.error("Error creating agenda:", error);
+    
+//     if (error.message === 'Authorization timeout' || error.message === 'Query timeout') {
+//       return res.status(504).json({ 
+//         error: "Request timeout",
+//         message: "The operation took too long. Please try again."
+//       });
+//     }
+    
+//     return res.status(500).json({ 
+//       error: "Internal server error"
+//     });
+//   } finally {
+//     trackQuery(success);
+//   }
+// };
+
+
+interface AgendaInput {
+  timeStamp: number;
+  action: string;
+  title?: string;
+  description?: string;
+  duration?: number;
+  options?: string[]; // For Poll
+  questions?: Array<{
+    questionText: string;
+    options: string[];
+    correctAnswer: string;
+    isMultiChoice?: boolean;
+    points?: number;
+  }>; // For Quiz
+  topic?: string; // For Q&A
+  customData?: any; // For Custom
+}
+
+interface CreateResult {
+  success: boolean;
+  data?: any;
+  error?: string;
+  index: number;
+}
+
 export const createAgenda = async (req: TenantRequest, res: Response) => {
   const { streamId } = req.params; 
   const { agendas, wallet } = req.body;
@@ -99,14 +403,8 @@ export const createAgenda = async (req: TenantRequest, res: Response) => {
       return res.status(400).json({ error: "Invalid wallet address format." });
     }
 
-    // Get authorization data with timeout
-    const authData = await Promise.race([
-      getAuthorizationData(streamId, wallet, tenant.id),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Authorization timeout')), 5000)
-      )
-    ]) as any;
-
+    // Get authorization data with cache
+    const authData = await getAuthorizationData(streamId, wallet, tenant.id);
     const { stream, requestingUser } = authData;
 
     if (!stream) {
@@ -131,188 +429,135 @@ export const createAgenda = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // Create agendas individually with timeout handling
+    // FIXED: Properly typed arrays
     const createdAgendas: any[] = [];
-    const failedAgendas: any[] = [];
+    const failedAgendas: Array<{ index: number; error: string }> = [];
+    
+    // Process agendas in batches of 3 to avoid overwhelming the connection pool
+    const batchSize = 3;
+    const agendasToCreate = agendas.slice(0, 10) as AgendaInput[]; // Limit to 10
+    
+    for (let i = 0; i < agendasToCreate.length; i += batchSize) {
+      const batch = agendasToCreate.slice(i, i + batchSize);
+      
+      const batchPromises = batch.map(async (agenda: AgendaInput, batchIndex: number): Promise<CreateResult> => {
+        const index = i + batchIndex;
+        try {
+          // Validate agenda
+          if (typeof agenda.timeStamp !== 'number' || agenda.timeStamp < 0) {
+            throw new Error(`Invalid timeStamp for agenda ${index + 1}`);
+          }
 
-    for (const [index, agenda] of agendas.entries()) {
-      try {
-        // Validate agenda
-        if (typeof agenda.timeStamp !== 'number' || agenda.timeStamp < 0) {
-          throw new Error(`Invalid timeStamp (must be positive number)`);
-        }
+          if (!agenda.action || !Object.values(AgendaAction).includes(agenda.action as any)) {
+            throw new Error(`Invalid action type: ${agenda.action}`);
+          }
 
-        if (!agenda.action || !Object.values(AgendaAction).includes(agenda.action as any)) {
-          throw new Error(`Invalid action type`);
-        }
+          const actionEnum = agenda.action as AgendaAction;
 
-        const actionEnum = agenda.action as AgendaAction;
+          // Validate action-specific fields
+          if (actionEnum === AgendaAction.Poll && (!agenda.options || agenda.options.length < 2)) {
+            throw new Error(`Poll requires at least 2 options`);
+          }
 
-        // Base agenda data
-        const baseAgendaData = {
-          streamId: stream.id,
-          timeStamp: agenda.timeStamp,
-          action: actionEnum,
-          title: agenda.title || null,
-          description: agenda.description || null,
-          duration: agenda.duration || null,
-          tenantId: tenant.id,
-        };
+          if (actionEnum === AgendaAction.Quiz && (!agenda.questions || agenda.questions.length < 1)) {
+            throw new Error(`Quiz requires at least 1 question`);
+          }
 
-        let createdAgenda: any;
-
-        // Create based on type with timeout
-        switch (actionEnum) {
-          case AgendaAction.Poll:
-            if (!agenda.options || !Array.isArray(agenda.options) || agenda.options.length < 2) {
-              throw new Error(`Poll requires at least 2 options`);
-            }
-
-            // Create agenda first
-            createdAgenda = await executeQuery(
-              () => db.agenda.create({
-                data: baseAgendaData,
-                include: { pollContent: true }
-              }),
-              { maxRetries: 1, timeout: 3000 }
-            );
-
-            // Then create poll content
-            await executeQuery(
-              () => db.pollContent.create({
-                data: {
-                  agendaId: createdAgenda.id,
-                  options: agenda.options,
-                  totalVotes: 0
-                }
-              }),
-              { maxRetries: 1, timeout: 3000 }
-            );
-            break;
-
-          case AgendaAction.Quiz:
-            if (!agenda.questions || !Array.isArray(agenda.questions) || agenda.questions.length < 1) {
-              throw new Error(`Quiz requires at least 1 question`);
-            }
-
-            // Create agenda first
-            createdAgenda = await executeQuery(
-              () => db.agenda.create({
-                data: baseAgendaData,
-                include: { quizContent: true }
-              }),
-              { maxRetries: 1, timeout: 3000 }
-            );
-
-            // Create quiz content
-            const quizContent = await executeQuery(
-              () => db.quizContent.create({
-                data: {
-                  agendaId: createdAgenda.id
-                }
-              }),
-              { maxRetries: 1, timeout: 3000 }
-            );
-
-            // Create questions individually with timeout
-            for (const question of agenda.questions.slice(0, 10)) { // Limit to 10 questions
-              await executeQuery(
-                () => db.quizQuestion.create({
-                  data: {
-                    quizContentId: quizContent.id,
-                    questionText: question.questionText,
-                    options: question.options,
-                    correctAnswer: question.correctAnswer,
-                    isMultiChoice: question.isMultiChoice ?? true,
-                    points: question.points ?? 1
+          // Create agenda with nested create for related content
+          const createdAgenda = await executeQuery(
+            () => db.agenda.create({
+              data: {
+                streamId: stream.id,
+                timeStamp: agenda.timeStamp,
+                action: actionEnum,
+                title: agenda.title || null,
+                description: agenda.description || null,
+                duration: agenda.duration || null,
+                tenantId: tenant.id,
+                
+                // Create related content inline based on type
+                ...(actionEnum === AgendaAction.Poll && agenda.options && {
+                  pollContent: {
+                    create: {
+                      options: agenda.options,
+                      totalVotes: 0
+                    }
                   }
                 }),
-                { maxRetries: 1, timeout: 2000 }
-              ).catch(err => {
-                console.error(`Failed to create quiz question: ${err.message}`);
-              });
-            }
-            break;
-
-          case AgendaAction.Q_A:
-            createdAgenda = await executeQuery(
-              () => db.agenda.create({
-                data: baseAgendaData,
-                include: { qaContent: true }
-              }),
-              { maxRetries: 1, timeout: 3000 }
-            );
-
-            await executeQuery(
-              () => db.qAContent.create({
-                data: {
-                  agendaId: createdAgenda.id,
-                  topic: agenda.topic || agenda.title || null
-                }
-              }),
-              { maxRetries: 1, timeout: 3000 }
-            );
-            break;
-
-          case AgendaAction.Custom:
-          default:
-            createdAgenda = await executeQuery(
-              () => db.agenda.create({
-                data: baseAgendaData,
-                include: { customContent: true }
-              }),
-              { maxRetries: 1, timeout: 3000 }
-            );
-
-            await executeQuery(
-              () => db.customContent.create({
-                data: {
-                  agendaId: createdAgenda.id,
-                  customData: agenda.customData || {}
-                }
-              }),
-              { maxRetries: 1, timeout: 3000 }
-            );
-            break;
-        }
-
-        // Fetch complete agenda with all relations
-        const completeAgenda = await executeQuery(
-          () => db.agenda.findUnique({
-            where: { id: createdAgenda.id },
-            include: {
-              pollContent: true,
-              quizContent: {
-                include: { 
-                  questions: {
-                    take: 10 // Limit questions
-                  } 
-                }
+                
+                ...(actionEnum === AgendaAction.Quiz && agenda.questions && {
+                  quizContent: {
+                    create: {
+                      questions: {
+                        create: agenda.questions.slice(0, 10).map((q) => ({
+                          questionText: q.questionText,
+                          options: q.options || [],
+                          correctAnswer: q.correctAnswer,
+                          isMultiChoice: q.isMultiChoice ?? true,
+                          points: q.points ?? 1
+                        }))
+                      }
+                    }
+                  }
+                }),
+                
+                ...(actionEnum === AgendaAction.Q_A && {
+                  qaContent: {
+                    create: {
+                      topic: agenda.topic || agenda.title || null
+                    }
+                  }
+                }),
+                
+                ...(actionEnum === AgendaAction.Custom && {
+                  customContent: {
+                    create: {
+                      customData: agenda.customData || {}
+                    }
+                  }
+                })
               },
-              qaContent: true,
-              customContent: true
-            }
-          }),
-          { maxRetries: 1, timeout: 3000 }
-        );
-
-        createdAgendas.push(completeAgenda);
-      } catch (error: any) {
-        console.error(`Failed to create agenda ${index + 1}:`, error);
-        
-        if (error.message === 'Query timeout') {
-          // If we timeout, stop creating more agendas
-          failedAgendas.push({
-            index,
-            error: 'Database timeout - please try again with fewer agendas'
-          });
-          break;
+              include: {
+                pollContent: true,
+                quizContent: {
+                  include: { 
+                    questions: {
+                      take: 10
+                    } 
+                  }
+                },
+                qaContent: true,
+                customContent: true
+              }
+            }),
+            { maxRetries: 1, timeout: 3000 }
+          );
+          
+          return { success: true, data: createdAgenda, index };
+        } catch (error: any) {
+          console.error(`Failed to create agenda ${index + 1}:`, error);
+          return { success: false, error: error.message, index };
         }
-        
-        failedAgendas.push({
-          index,
-          error: error.message
-        });
+      });
+      
+      // Wait for batch to complete
+      const batchResults = await Promise.all(batchPromises);
+      
+      batchResults.forEach(result => {
+        if (result.success) {
+          createdAgendas.push(result.data);
+        } else {
+          failedAgendas.push({
+            index: result.index,
+            error: result.error || 'Unknown error'
+          });
+        }
+      });
+      
+      // If too many failures, stop processing more batches
+      if (failedAgendas.length > 3) {
+        console.log('Too many failures, stopping agenda creation');
+        break;
       }
     }
 
@@ -324,13 +569,15 @@ export const createAgenda = async (req: TenantRequest, res: Response) => {
       });
     }
 
+    // The failedAgendas array is useful for partial success scenarios
+    // It lets the client know which specific agendas failed and why
     if (failedAgendas.length > 0) {
-      // Partial success
+      // Partial success - 207 Multi-Status
       success = true;
       return res.status(207).json({
         created: createdAgendas,
         failed: failedAgendas,
-        message: `Created ${createdAgendas.length} of ${agendas.length} agendas`
+        message: `Created ${createdAgendas.length} of ${agendasToCreate.length} agendas`
       });
     }
 
@@ -584,6 +831,91 @@ export const getStreamAgenda = async (
 /**
  * Get a single agenda with full details - for when user clicks on an agenda
  */
+// export const getAgendaDetails = async (req: TenantRequest, res: Response) => {
+//   const { agendaId } = req.params;
+//   const tenant = req.tenant;
+//   let success = false;
+
+//   try {
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });
+//     }
+
+//     if (!agendaId) {
+//       return res.status(400).json({ error: "Missing agenda ID" });
+//     }
+
+//     // Get full agenda details including questions and responses
+//     const agenda = await executeQuery(
+//       () => db.agenda.findFirst({
+//         where: {
+//           id: agendaId,
+//           tenantId: tenant.id,
+//         },
+//         include: {
+//           pollContent: true,
+//           quizContent: {
+//             include: { 
+//               questions: {
+//                 take: 20 // Limit questions
+//               } 
+//             }
+//           },
+//           qaContent: true,
+//           customContent: true,
+//           participantResponses: {
+//             select: {
+//               id: true,
+//               responseType: true,
+//               timestamp: true,
+//               participant: {
+//                 select: {
+//                   id: true,
+//                   userName: true,
+//                   walletAddress: true
+//                 }
+//               }
+//             },
+//             take: 50 // Limit responses
+//           },
+//           stream: {
+//             select: {
+//               id: true,
+//               name: true,
+//               isLive: true
+//             }
+//           }
+//         }
+//       }),
+//       { maxRetries: 1, timeout: 5000 }
+//     );
+
+//     if (!agenda) {
+//       return res.status(404).json({ 
+//         error: "Agenda not found",
+//         details: `Agenda ${agendaId} not found in your tenant`
+//       });
+//     }
+
+//     success = true;
+//     return res.status(200).json(agenda);
+//   } catch (error: any) {
+//     console.error("Error fetching agenda details:", error);
+    
+//     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+//       return res.status(504).json({ 
+//         error: "Database query timeout",
+//         message: "The request took too long. Please try again."
+//       });
+//     }
+    
+//     return res.status(500).json({ error: "Internal server error" });
+//   } finally {
+//     trackQuery(success);
+//   }
+// };
+
+
 export const getAgendaDetails = async (req: TenantRequest, res: Response) => {
   const { agendaId } = req.params;
   const tenant = req.tenant;
@@ -598,39 +930,68 @@ export const getAgendaDetails = async (req: TenantRequest, res: Response) => {
       return res.status(400).json({ error: "Missing agenda ID" });
     }
 
-    // Get full agenda details including questions and responses
+    // FIXED: Removed createdAt and updatedAt since they don't exist in the model
     const agenda = await executeQuery(
       () => db.agenda.findFirst({
         where: {
           id: agendaId,
           tenantId: tenant.id,
         },
-        include: {
-          pollContent: true,
-          quizContent: {
-            include: { 
-              questions: {
-                take: 20 // Limit questions
-              } 
-            }
-          },
-          qaContent: true,
-          customContent: true,
-          participantResponses: {
+        select: {
+          id: true,
+          streamId: true,
+          timeStamp: true,
+          action: true,
+          title: true,
+          description: true,
+          duration: true,
+          isCompleted: true,
+          tenantId: true,
+          
+          // Optimized relations - only get essential data
+          pollContent: {
             select: {
               id: true,
-              responseType: true,
-              timestamp: true,
-              participant: {
+              options: true,
+              totalVotes: true
+            }
+          },
+          quizContent: {
+            select: {
+              id: true,
+              questions: {
                 select: {
                   id: true,
-                  userName: true,
-                  walletAddress: true
-                }
+                  questionText: true,
+                  options: true,
+                  correctAnswer: true,
+                  isMultiChoice: true,
+                  points: true
+                },
+                take: 10 // Limit questions
               }
-            },
-            take: 50 // Limit responses
+            }
           },
+          qaContent: {
+            select: {
+              id: true,
+              topic: true
+            }
+          },
+          customContent: {
+            select: {
+              id: true,
+              customData: true
+            }
+          },
+          
+          // Count responses
+          _count: {
+            select: {
+              participantResponses: true
+            }
+          },
+          
           stream: {
             select: {
               id: true,
@@ -640,7 +1001,7 @@ export const getAgendaDetails = async (req: TenantRequest, res: Response) => {
           }
         }
       }),
-      { maxRetries: 1, timeout: 5000 }
+      { maxRetries: 1, timeout: 2000 }
     );
 
     if (!agenda) {
@@ -650,8 +1011,15 @@ export const getAgendaDetails = async (req: TenantRequest, res: Response) => {
       });
     }
 
+    // FIXED: Properly handle the _count field
+    const result = {
+      ...agenda,
+      responseCount: agenda._count?.participantResponses || 0,
+      _count: undefined // Remove _count from response
+    };
+
     success = true;
-    return res.status(200).json(agenda);
+    return res.status(200).json(result);
   } catch (error: any) {
     console.error("Error fetching agenda details:", error);
     

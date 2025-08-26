@@ -18,15 +18,144 @@ const PARTICIPANT_CACHE_TTL = 30000; // 30 seconds
 /**
  * Controller for getting all stream participants - FIXED WITH SINGLE RESPONSE
  */
+// export const getStreamParticipants = async (
+//   req: TenantRequest,
+//   res: Response
+// ) => {
+//   console.log('[DEBUG] getStreamParticipants called');
+  
+//   // Guard: Check if response already sent at the very beginning
+//   if (res.headersSent) {
+//     console.log(`[getStreamParticipants] Response already sent at start`);
+//     return;
+//   }
+  
+//   const { streamId } = req.params;
+//   const tenant = req.tenant;
+//   let success = false;
+
+//   try {
+//     const abortController = (req as any).abortController;
+//     if (abortController?.signal?.aborted) {
+//       console.log(`[getStreamParticipants] Request already aborted for ${streamId}`);
+//       return;
+//     }
+
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });  // CRITICAL: Return immediately after sending response
+//     }
+
+//     if (!streamId) {
+//       return res.status(400).json({ error: "Missing required field: streamId" });  // CRITICAL: Return immediately after sending response
+//     }
+
+//     // Check cache first
+//     const cacheKey = `${tenant.id}:${streamId}:participants`;
+//     const cached = participantCache.get(cacheKey);
+    
+//     if (cached && Date.now() - cached.timestamp < PARTICIPANT_CACHE_TTL) {
+//       success = true;
+//       return res.status(200).json({ participants: cached.data });  // CRITICAL: Return immediately after sending response
+//     }
+
+//     // Before making the query, check again
+//     if (res.headersSent || abortController?.signal?.aborted) {
+//       console.log(`[getStreamParticipants] Aborted before query for ${streamId}`);
+//       return;
+//     }
+
+//     // Query with REDUCED timeout - IMPORTANT: Much shorter than request timeout
+//     const stream = await executeQuery(
+//       () => db.stream.findFirst({
+//         where: {
+//           name: streamId,
+//           tenantId: tenant.id,
+//         },
+//         select: {
+//           id: true,
+//           participants: {
+//             select: {
+//               id: true,
+//               userName: true,
+//               walletAddress: true,
+//               userType: true,
+//               avatarUrl: true,
+//               joinedAt: true,
+//               leftAt: true,
+//               totalPoints: true,
+//             },
+//             orderBy: {
+//               joinedAt: 'desc'
+//             },
+//             take: 100 // Limit to prevent timeout
+//           }
+//         }
+//       }),
+//       { maxRetries: 1, timeout: 3000 } // 3 seconds, well below request timeout
+//     );
+
+//     // Check again after query completes
+//     if (res.headersSent || abortController?.signal?.aborted) {
+//       console.log(`[getStreamParticipants] Response sent/aborted after query for ${streamId}`);
+//       return;
+//     }
+
+//     if (!stream) {
+//       return res.status(404).json({
+//         error: `Stream with name ${streamId} not found`,
+//       });  // CRITICAL: Return immediately after sending response
+//     }
+
+//     // Cache the results
+//     participantCache.set(cacheKey, { 
+//       data: stream.participants, 
+//       timestamp: Date.now() 
+//     });
+
+//     success = true;
+    
+//     // Final check before sending (belt and suspenders)
+//     if (res.headersSent) {
+//       console.log(`[getStreamParticipants] Response already sent before final send`);
+//       return;
+//     }
+    
+//     return res.status(200).json({ participants: stream.participants });
+    
+//   } catch (error: any) {
+//     console.error("Error fetching stream participants:", error);
+    
+//     // Check before sending error response
+//     if (res.headersSent) {
+//       console.log(`[getStreamParticipants] Error after response sent for ${req.params.streamId}`);
+//       return;
+//     }
+    
+//     const abortController = (req as any).abortController;
+//     if (abortController?.signal?.aborted) {
+//       console.log(`[getStreamParticipants] Error after abort for ${req.params.streamId}`);
+//       return;
+//     }
+    
+//     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+//       return res.status(504).json({ 
+//         error: "Database query timeout",
+//         message: "The request took too long. Please try again."
+//       });
+//     }
+    
+//     return res.status(500).json({ error: "Internal server error" });
+//   } finally {
+//     trackQuery(success);
+//   }
+// };
+
+
 export const getStreamParticipants = async (
   req: TenantRequest,
   res: Response
 ) => {
-  console.log('[DEBUG] getStreamParticipants called');
-  
-  // Guard: Check if response already sent at the very beginning
   if (res.headersSent) {
-    console.log(`[getStreamParticipants] Response already sent at start`);
     return;
   }
   
@@ -37,16 +166,15 @@ export const getStreamParticipants = async (
   try {
     const abortController = (req as any).abortController;
     if (abortController?.signal?.aborted) {
-      console.log(`[getStreamParticipants] Request already aborted for ${streamId}`);
       return;
     }
 
     if (!tenant) {
-      return res.status(401).json({ error: "Tenant authentication required." });  // CRITICAL: Return immediately after sending response
+      return res.status(401).json({ error: "Tenant authentication required." });
     }
 
     if (!streamId) {
-      return res.status(400).json({ error: "Missing required field: streamId" });  // CRITICAL: Return immediately after sending response
+      return res.status(400).json({ error: "Missing required field: streamId" });
     }
 
     // Check cache first
@@ -55,87 +183,47 @@ export const getStreamParticipants = async (
     
     if (cached && Date.now() - cached.timestamp < PARTICIPANT_CACHE_TTL) {
       success = true;
-      return res.status(200).json({ participants: cached.data });  // CRITICAL: Return immediately after sending response
+      return res.status(200).json({ participants: cached.data });
     }
 
-    // Before making the query, check again
-    if (res.headersSent || abortController?.signal?.aborted) {
-      console.log(`[getStreamParticipants] Aborted before query for ${streamId}`);
-      return;
-    }
-
-    // Query with REDUCED timeout - IMPORTANT: Much shorter than request timeout
-    const stream = await executeQuery(
-      () => db.stream.findFirst({
-        where: {
-          name: streamId,
-          tenantId: tenant.id,
-        },
-        select: {
-          id: true,
-          participants: {
-            select: {
-              id: true,
-              userName: true,
-              walletAddress: true,
-              userType: true,
-              avatarUrl: true,
-              joinedAt: true,
-              leftAt: true,
-              totalPoints: true,
-            },
-            orderBy: {
-              joinedAt: 'desc'
-            },
-            take: 100 // Limit to prevent timeout
-          }
-        }
-      }),
-      { maxRetries: 1, timeout: 3000 } // 3 seconds, well below request timeout
+    // ULTRA-OPTIMIZED: Use raw query with proper joins and indexes
+    const participants = await executeQuery(
+      () => db.$queryRaw`
+        SELECT 
+          p.id, 
+          p."userName", 
+          p."walletAddress", 
+          p."userType", 
+          p."avatarUrl", 
+          p."joinedAt", 
+          p."leftAt", 
+          p."totalPoints"
+        FROM "Participant" p
+        INNER JOIN "Stream" s ON p."streamId" = s.id
+        WHERE s.name = ${streamId}
+          AND s."tenantId" = ${tenant.id}
+        ORDER BY p."leftAt" IS NULL DESC, p."joinedAt" DESC
+        LIMIT 50
+      `,
+      { maxRetries: 1, timeout: 2000 }
     );
-
-    // Check again after query completes
-    if (res.headersSent || abortController?.signal?.aborted) {
-      console.log(`[getStreamParticipants] Response sent/aborted after query for ${streamId}`);
-      return;
-    }
-
-    if (!stream) {
-      return res.status(404).json({
-        error: `Stream with name ${streamId} not found`,
-      });  // CRITICAL: Return immediately after sending response
-    }
 
     // Cache the results
     participantCache.set(cacheKey, { 
-      data: stream.participants, 
+      data: participants, 
       timestamp: Date.now() 
     });
 
     success = true;
     
-    // Final check before sending (belt and suspenders)
-    if (res.headersSent) {
-      console.log(`[getStreamParticipants] Response already sent before final send`);
-      return;
+    if (!res.headersSent && !abortController?.signal?.aborted) {
+      return res.status(200).json({ participants });
     }
-    
-    return res.status(200).json({ participants: stream.participants });
     
   } catch (error: any) {
     console.error("Error fetching stream participants:", error);
     
-    // Check before sending error response
-    if (res.headersSent) {
-      console.log(`[getStreamParticipants] Error after response sent for ${req.params.streamId}`);
-      return;
-    }
-    
-    const abortController = (req as any).abortController;
-    if (abortController?.signal?.aborted) {
-      console.log(`[getStreamParticipants] Error after abort for ${req.params.streamId}`);
-      return;
-    }
+    if (res.headersSent) return;
     
     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
       return res.status(504).json({ 

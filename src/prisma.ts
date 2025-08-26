@@ -67,7 +67,7 @@ connectWithRetry().catch(error => {
 class QueryQueue {
   private queue: Array<() => void> = [];
   private activeQueries = 0;
-  private maxConcurrent = 8; // Reduced from 15 to prevent exhaustion
+  private maxConcurrent = 15; // Reduced from 15 to prevent exhaustion
   
   async execute<T>(fn: () => Promise<T>): Promise<T> {
     while (this.activeQueries >= this.maxConcurrent) {
