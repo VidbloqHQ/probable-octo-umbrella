@@ -1,7 +1,7 @@
 import express from "express";
 // import { safeController } from "../middlewares/request-lock.middleware.js";
 import { singletonController } from "../utils/singleton-controller.js";
-import { createAgenda, getStreamAgenda, updateStreamAgenda, deleteAgenda, getAgenda, } from "../controllers/agenda.controller.js";
+import { createAgenda, getStreamAgenda, updateStreamAgenda, deleteAgenda, getAgendaDetails } from "../controllers/agenda.controller.js";
 const router = express.Router();
 // router.post("/:streamId", createAgenda);
 // router.get("/stream/:streamId", getStreamAgenda);
@@ -11,6 +11,6 @@ const router = express.Router();
 router.post("/:streamId", singletonController('createAgenda', createAgenda));
 router.get("/stream/:streamId", singletonController('getStreamAgenda', getStreamAgenda));
 router.put("/:agendaId", singletonController('updateStreamAgenda', updateStreamAgenda));
-router.get("/:agendaId", singletonController('getAgenda', getAgenda));
+router.get("/:agendaId", singletonController('getAgendaDetails', getAgendaDetails));
 router.delete("/:agendaId/:wallet", singletonController('deleteAgenda', deleteAgenda));
 export default router;

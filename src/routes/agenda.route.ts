@@ -7,6 +7,7 @@ import {
   updateStreamAgenda,
   deleteAgenda,
   getAgenda,
+  getAgendaDetails
 } from "../controllers/agenda.controller.js";
 
 const router = express.Router();
@@ -20,7 +21,7 @@ const router = express.Router();
 router.post("/:streamId", singletonController('createAgenda', createAgenda));
 router.get("/stream/:streamId", singletonController('getStreamAgenda', getStreamAgenda));
 router.put("/:agendaId", singletonController('updateStreamAgenda', updateStreamAgenda));
-router.get("/:agendaId", singletonController('getAgenda', getAgenda));
+router.get("/:agendaId", singletonController('getAgendaDetails', getAgendaDetails));
 router.delete("/:agendaId/:wallet", singletonController('deleteAgenda', deleteAgenda));
 
 export default router;
