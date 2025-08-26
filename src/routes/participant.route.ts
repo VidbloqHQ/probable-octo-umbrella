@@ -11,7 +11,8 @@ import { singletonController } from "../utils/singleton-controller.js";
 
 const router = express.Router();
 
-router.get("/:streamId", singletonController('getStreamParticipants', getStreamParticipants));
+// router.get("/:streamId", singletonController('getStreamParticipants', getStreamParticipants));
+router.get("/:streamId", getStreamParticipants);
 router.put("/:streamId", singletonController('updateParticipantLeftTime', updateParticipantLeftTime));
 router.post("/:streamId", singletonController('updateParticipantLeftTime', updateParticipantLeftTime));
 router.post("/update/permission", singletonController('updateParticipantPermissions', updateParticipantPermissions));
@@ -19,7 +20,6 @@ router.get("/scores", singletonController('getParticipantScores', getParticipant
 
 export default router;
 
-// router.get("/:streamId", getStreamParticipants);
 // router.put("/:streamId", updateParticipantLeftTime);
 // router.post("/:streamId", updateParticipantLeftTime);
 // router.post("/update/permission", updateParticipantPermissions);

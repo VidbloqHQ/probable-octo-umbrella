@@ -1555,54 +1555,76 @@ export const getAgenda = async (req: TenantRequest, res: Response) => {
 };
 
 // In agenda.controller.ts - add this SIMPLER version
+// export const getAgendaById = async (req: TenantRequest, res: Response) => {
+//   const { agendaId } = req.params;
+//   const tenant = req.tenant;
+//   let success = false;
+
+//   try {
+//     if (!tenant) {
+//       return res.status(401).json({ error: "Tenant authentication required." });
+//     }
+
+//     // MUCH SIMPLER QUERY - just get the agenda with basic content
+//     const agenda = await executeQuery(
+//       () => db.agenda.findFirst({
+//         where: {
+//           id: agendaId,
+//           tenantId: tenant.id,
+//         },
+//         select: {
+//           id: true,
+//           streamId: true,
+//           timeStamp: true,
+//           action: true,
+//           title: true,
+//           description: true,
+//           duration: true,
+//           isCompleted: true,
+//           tenantId: true
+//         }
+//       }),
+//       { maxRetries: 1, timeout: 500 }
+//     );
+
+//     if (!agenda) {
+//       return res.status(404).json({ 
+//         error: "Agenda not found"
+//       });
+//     }
+
+//     success = true;
+//     return res.status(200).json(agenda);
+//   } catch (error: any) {
+//     console.error("Error fetching agenda:", error);
+//     return res.status(500).json({ error: "Internal server error" });
+//   } finally {
+//     trackQuery(success);
+//   }
+// };
+
 export const getAgendaById = async (req: TenantRequest, res: Response) => {
   const { agendaId } = req.params;
   const tenant = req.tenant;
-  let success = false;
 
-  try {
-    if (!tenant) {
+  if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
 
-    // MUCH SIMPLER QUERY - just get the agenda with basic content
-    const agenda = await executeQuery(
-      () => db.agenda.findFirst({
-        where: {
-          id: agendaId,
-          tenantId: tenant.id,
-        },
-        select: {
-          id: true,
-          streamId: true,
-          timeStamp: true,
-          action: true,
-          title: true,
-          description: true,
-          duration: true,
-          isCompleted: true,
-          tenantId: true
-        }
-      }),
-      { maxRetries: 1, timeout: 500 }
-    );
-
-    if (!agenda) {
-      return res.status(404).json({ 
-        error: "Agenda not found"
-      });
-    }
-
-    success = true;
-    return res.status(200).json(agenda);
-  } catch (error: any) {
-    console.error("Error fetching agenda:", error);
-    return res.status(500).json({ error: "Internal server error" });
-  } finally {
-    trackQuery(success);
+  const agenda = await db.$queryRaw<
+    Array<Record<string, any>>
+  >`
+    SELECT * FROM "Agenda" 
+    WHERE id = ${agendaId} AND "tenantId" = ${tenant.id}
+    LIMIT 1
+  `;
+  
+  if (!agenda || agenda.length === 0) {
+    return res.status(404).json({ error: "Agenda not found" });
   }
+  
+  return res.status(200).json(agenda[0]);
 };
-
 /**
  * Helper function to validate content updates match the agenda type
  */
