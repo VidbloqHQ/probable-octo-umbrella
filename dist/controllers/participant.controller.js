@@ -123,77 +123,46 @@ const PARTICIPANT_CACHE_TTL = 30000; // 30 seconds
 //   }
 // };
 export const getStreamParticipants = async (req, res) => {
-    console.log('[DEBUG] getStreamParticipants START');
-    const startTime = Date.now();
-    if (res.headersSent) {
-        return;
-    }
     const { streamId } = req.params;
     const tenant = req.tenant;
-    let success = false;
+    if (!tenant || !streamId) {
+        return res.status(400).json({ error: "Missing required fields" });
+    }
     try {
-        const abortController = req.abortController;
-        if (abortController?.signal?.aborted) {
-            return;
-        }
-        if (!tenant) {
-            return res.status(401).json({ error: "Tenant authentication required." });
-        }
-        if (!streamId) {
-            return res.status(400).json({ error: "Missing required field: streamId" });
-        }
-        // Check cache first
-        const cacheKey = `${tenant.id}:${streamId}:participants`;
-        const cached = participantCache.get(cacheKey);
-        console.log(`[DEBUG] Cache check took ${Date.now() - startTime}ms`);
-        if (cached && Date.now() - cached.timestamp < PARTICIPANT_CACHE_TTL) {
-            success = true;
-            return res.status(200).json({ participants: cached.data });
-        }
-        // ULTRA-OPTIMIZED: Use raw query with proper joins and indexes
-        const queryStart = Date.now();
-        const participants = await executeQuery(() => db.$queryRaw `
-      SELECT 
-        p.id, 
-        p."userName", 
-        p."walletAddress", 
-        p."userType", 
-        p."avatarUrl", 
-        p."joinedAt", 
-        p."leftAt", 
-        p."totalPoints"
-      FROM "Participant" p
-      INNER JOIN "Stream" s ON p."streamId" = s.id
-      WHERE s.name = ${streamId}
-        AND s."tenantId" = ${tenant.id}
-      ORDER BY p."leftAt" IS NULL DESC, p."joinedAt" DESC
-      LIMIT 50
-    `, { maxRetries: 1, timeout: 2000 });
-        console.log(`[DEBUG] Query took ${Date.now() - queryStart}ms, found ${participants.length} participants`);
-        // Cache the results
-        participantCache.set(cacheKey, {
-            data: participants,
-            timestamp: Date.now()
+        // Skip the raw SQL - use Prisma ORM with minimal fields
+        const stream = await db.stream.findFirst({
+            where: {
+                name: streamId,
+                tenantId: tenant.id,
+            },
+            select: {
+                id: true,
+                participants: {
+                    select: {
+                        id: true,
+                        userName: true,
+                        walletAddress: true,
+                        userType: true,
+                        avatarUrl: true,
+                        joinedAt: true,
+                        leftAt: true,
+                        totalPoints: true,
+                    },
+                    take: 50,
+                    orderBy: {
+                        joinedAt: 'desc'
+                    }
+                }
+            }
         });
-        success = true;
-        if (!res.headersSent && !abortController?.signal?.aborted) {
-            return res.status(200).json({ participants });
+        if (!stream) {
+            return res.status(404).json({ error: "Stream not found" });
         }
+        return res.status(200).json({ participants: stream.participants });
     }
     catch (error) {
-        console.error("Error fetching stream participants:", error);
-        if (res.headersSent)
-            return;
-        if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-            return res.status(504).json({
-                error: "Database query timeout",
-                message: "The request took too long. Please try again."
-            });
-        }
+        console.error("Error:", error);
         return res.status(500).json({ error: "Internal server error" });
-    }
-    finally {
-        trackQuery(success);
     }
 };
 // TEST VERSION - Direct response without caching or serialization

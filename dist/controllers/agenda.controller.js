@@ -1114,18 +1114,26 @@ export const getAgenda = async (req, res) => {
 export const getAgendaById = async (req, res) => {
     const { agendaId } = req.params;
     const tenant = req.tenant;
-    if (!tenant) {
-        return res.status(401).json({ error: "Tenant authentication required." });
+    if (!tenant || !agendaId) {
+        return res.status(400).json({ error: "Missing required fields" });
     }
-    const agenda = await db.$queryRaw `
-    SELECT * FROM "Agenda" 
-    WHERE id = ${agendaId} AND "tenantId" = ${tenant.id}
-    LIMIT 1
-  `;
-    if (!agenda || agenda.length === 0) {
-        return res.status(404).json({ error: "Agenda not found" });
+    try {
+        // Just get the agenda - no includes
+        const agenda = await db.agenda.findFirst({
+            where: {
+                id: agendaId,
+                tenantId: tenant.id,
+            }
+        });
+        if (!agenda) {
+            return res.status(404).json({ error: "Agenda not found" });
+        }
+        return res.status(200).json(agenda);
     }
-    return res.status(200).json(agenda[0]);
+    catch (error) {
+        console.error("Error:", error);
+        return res.status(500).json({ error: "Internal server error" });
+    }
 };
 /**
  * Helper function to validate content updates match the agenda type
