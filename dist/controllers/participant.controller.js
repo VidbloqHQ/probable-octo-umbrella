@@ -123,7 +123,8 @@ const PARTICIPANT_CACHE_TTL = 30000; // 30 seconds
 //   }
 // };
 export const getStreamParticipants = async (req, res) => {
-    console.log('[DEBUG] Using OPTIMIZED getStreamParticipants with raw SQL');
+    console.log('[DEBUG] getStreamParticipants START');
+    const startTime = Date.now();
     if (res.headersSent) {
         return;
     }
@@ -144,28 +145,31 @@ export const getStreamParticipants = async (req, res) => {
         // Check cache first
         const cacheKey = `${tenant.id}:${streamId}:participants`;
         const cached = participantCache.get(cacheKey);
+        console.log(`[DEBUG] Cache check took ${Date.now() - startTime}ms`);
         if (cached && Date.now() - cached.timestamp < PARTICIPANT_CACHE_TTL) {
             success = true;
             return res.status(200).json({ participants: cached.data });
         }
         // ULTRA-OPTIMIZED: Use raw query with proper joins and indexes
+        const queryStart = Date.now();
         const participants = await executeQuery(() => db.$queryRaw `
-        SELECT 
-          p.id, 
-          p."userName", 
-          p."walletAddress", 
-          p."userType", 
-          p."avatarUrl", 
-          p."joinedAt", 
-          p."leftAt", 
-          p."totalPoints"
-        FROM "Participant" p
-        INNER JOIN "Stream" s ON p."streamId" = s.id
-        WHERE s.name = ${streamId}
-          AND s."tenantId" = ${tenant.id}
-        ORDER BY p."leftAt" IS NULL DESC, p."joinedAt" DESC
-        LIMIT 50
-      `, { maxRetries: 1, timeout: 2000 });
+      SELECT 
+        p.id, 
+        p."userName", 
+        p."walletAddress", 
+        p."userType", 
+        p."avatarUrl", 
+        p."joinedAt", 
+        p."leftAt", 
+        p."totalPoints"
+      FROM "Participant" p
+      INNER JOIN "Stream" s ON p."streamId" = s.id
+      WHERE s.name = ${streamId}
+        AND s."tenantId" = ${tenant.id}
+      ORDER BY p."leftAt" IS NULL DESC, p."joinedAt" DESC
+      LIMIT 50
+    `, { maxRetries: 1, timeout: 2000 });
+        console.log(`[DEBUG] Query took ${Date.now() - queryStart}ms, found ${participants.length} participants`);
         // Cache the results
         participantCache.set(cacheKey, {
             data: participants,

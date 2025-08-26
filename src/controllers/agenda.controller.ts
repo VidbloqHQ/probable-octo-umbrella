@@ -1572,22 +1572,19 @@ export const getAgendaById = async (req: TenantRequest, res: Response) => {
           id: agendaId,
           tenantId: tenant.id,
         },
-        include: {
-          // Only include the content that exists, not all types
-          pollContent: true,
-          qaContent: true,
-          customContent: true,
-          // For quiz, just get the count
-          quizContent: {
-            include: {
-              _count: {
-                select: { questions: true }
-              }
-            }
-          }
+        select: {
+          id: true,
+          streamId: true,
+          timeStamp: true,
+          action: true,
+          title: true,
+          description: true,
+          duration: true,
+          isCompleted: true,
+          tenantId: true
         }
       }),
-      { maxRetries: 1, timeout: 1000 } // Aggressive timeout
+      { maxRetries: 1, timeout: 500 }
     );
 
     if (!agenda) {
