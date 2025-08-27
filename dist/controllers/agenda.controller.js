@@ -1067,48 +1067,27 @@ export const getAgenda = async (req, res) => {
         return res.status(500).json({ error: "Internal server error" });
     }
 };
-// In agenda.controller.ts - add this SIMPLER version
 // export const getAgendaById = async (req: TenantRequest, res: Response) => {
 //   const { agendaId } = req.params;
 //   const tenant = req.tenant;
-//   let success = false;
+//   if (!tenant || !agendaId) {
+//     return res.status(400).json({ error: "Missing required fields" });
+//   }
 //   try {
-//     if (!tenant) {
-//       return res.status(401).json({ error: "Tenant authentication required." });
-//     }
-//     // MUCH SIMPLER QUERY - just get the agenda with basic content
-//     const agenda = await executeQuery(
-//       () => db.agenda.findFirst({
-//         where: {
-//           id: agendaId,
-//           tenantId: tenant.id,
-//         },
-//         select: {
-//           id: true,
-//           streamId: true,
-//           timeStamp: true,
-//           action: true,
-//           title: true,
-//           description: true,
-//           duration: true,
-//           isCompleted: true,
-//           tenantId: true
-//         }
-//       }),
-//       { maxRetries: 1, timeout: 500 }
-//     );
+//     // Just get the agenda - no includes
+//     const agenda = await db.agenda.findFirst({
+//       where: {
+//         id: agendaId,
+//         tenantId: tenant.id,
+//       }
+//     });
 //     if (!agenda) {
-//       return res.status(404).json({ 
-//         error: "Agenda not found"
-//       });
+//       return res.status(404).json({ error: "Agenda not found" });
 //     }
-//     success = true;
 //     return res.status(200).json(agenda);
-//   } catch (error: any) {
-//     console.error("Error fetching agenda:", error);
+//   } catch (error) {
+//     console.error("Error:", error);
 //     return res.status(500).json({ error: "Internal server error" });
-//   } finally {
-//     trackQuery(success);
 //   }
 // };
 export const getAgendaById = async (req, res) => {
@@ -1118,7 +1097,6 @@ export const getAgendaById = async (req, res) => {
         return res.status(400).json({ error: "Missing required fields" });
     }
     try {
-        // Just get the agenda - no includes
         const agenda = await db.agenda.findFirst({
             where: {
                 id: agendaId,
@@ -1128,10 +1106,9 @@ export const getAgendaById = async (req, res) => {
         if (!agenda) {
             return res.status(404).json({ error: "Agenda not found" });
         }
-        return res.status(200).json(agenda);
+        return res.json(agenda);
     }
     catch (error) {
-        console.error("Error:", error);
         return res.status(500).json({ error: "Internal server error" });
     }
 };
