@@ -11,49 +11,6 @@ const PARTICIPANT_CACHE_TTL = 30000; // 30 seconds
 /**
  * Controller for getting all stream participants - FIXED WITH SINGLE RESPONSE
  */
-// export const getStreamParticipants = async (req: TenantRequest, res: Response) => {
-//   const { streamId } = req.params;
-//   const tenant = req.tenant;
-//   if (!tenant || !streamId) {
-//     return res.status(400).json({ error: "Missing required fields" });
-//   }
-//   try {
-//     // Skip the raw SQL - use Prisma ORM with minimal fields
-//     const stream = await db.stream.findFirst({
-//       where: {
-//         name: streamId,
-//         tenantId: tenant.id,
-//       },
-//       select: {
-//         id: true,
-//         participants: {
-//           select: {
-//             id: true,
-//             userName: true,
-//             walletAddress: true,
-//             userType: true,
-//             avatarUrl: true,
-//             joinedAt: true,
-//             leftAt: true,
-//             totalPoints: true,
-//           },
-//           take: 50,
-//           orderBy: {
-//             joinedAt: 'desc'
-//           }
-//         }
-//       }
-//     });
-//     if (!stream) {
-//       return res.status(404).json({ error: "Stream not found" });
-//     }
-//     return res.status(200).json({ participants: stream.participants });
-//   } catch (error) {
-//     console.error("Error:", error);
-//     return res.status(500).json({ error: "Internal server error" });
-//   }
-// };
-// TEST VERSION - Direct response without caching or serialization
 export const getStreamParticipants = async (req, res) => {
     const { streamId } = req.params;
     const tenant = req.tenant;

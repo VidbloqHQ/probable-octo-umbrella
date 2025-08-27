@@ -1,14 +1,15 @@
 import express from "express";
 import { singletonController } from "../utils/singleton-controller.js";
 import {
-  createAgenda,
-  getStreamAgenda,
+  // createAgenda,
+  // getStreamAgenda,
   updateStreamAgenda,
   deleteAgenda,
   getAgenda,
   getAgendaDetails,
-  getAgendaById
+  // getAgendaById
 } from "../controllers/agenda.controller.js";
+import { getAgendaById, createAgenda, getStreamAgenda } from "../controllers/new-agenda.js";
 
 const router = express.Router();
 

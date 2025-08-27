@@ -442,82 +442,6 @@ export const getStreamAgenda = async (req, res) => {
 /**
  * Get a single agenda with full details - for when user clicks on an agenda
  */
-// export const getAgendaDetails = async (req: TenantRequest, res: Response) => {
-//   const { agendaId } = req.params;
-//   const tenant = req.tenant;
-//   let success = false;
-//   try {
-//     if (!tenant) {
-//       return res.status(401).json({ error: "Tenant authentication required." });
-//     }
-//     if (!agendaId) {
-//       return res.status(400).json({ error: "Missing agenda ID" });
-//     }
-//     // Get full agenda details including questions and responses
-//     const agenda = await executeQuery(
-//       () => db.agenda.findFirst({
-//         where: {
-//           id: agendaId,
-//           tenantId: tenant.id,
-//         },
-//         include: {
-//           pollContent: true,
-//           quizContent: {
-//             include: { 
-//               questions: {
-//                 take: 20 // Limit questions
-//               } 
-//             }
-//           },
-//           qaContent: true,
-//           customContent: true,
-//           participantResponses: {
-//             select: {
-//               id: true,
-//               responseType: true,
-//               timestamp: true,
-//               participant: {
-//                 select: {
-//                   id: true,
-//                   userName: true,
-//                   walletAddress: true
-//                 }
-//               }
-//             },
-//             take: 50 // Limit responses
-//           },
-//           stream: {
-//             select: {
-//               id: true,
-//               name: true,
-//               isLive: true
-//             }
-//           }
-//         }
-//       }),
-//       { maxRetries: 1, timeout: 5000 }
-//     );
-//     if (!agenda) {
-//       return res.status(404).json({ 
-//         error: "Agenda not found",
-//         details: `Agenda ${agendaId} not found in your tenant`
-//       });
-//     }
-//     success = true;
-//     return res.status(200).json(agenda);
-//   } catch (error: any) {
-//     console.error("Error fetching agenda details:", error);
-//     if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-//       return res.status(504).json({ 
-//         error: "Database query timeout",
-//         message: "The request took too long. Please try again."
-//       });
-//     }
-//     return res.status(500).json({ error: "Internal server error" });
-//   } finally {
-//     trackQuery(success);
-//   }
-// };
 export const getAgendaDetails = async (req, res) => {
     console.log('[DEBUG] Using OPTIMIZED getAgendaDetails with raw SQL');
     const { agendaId } = req.params;
@@ -1067,29 +991,6 @@ export const getAgenda = async (req, res) => {
         return res.status(500).json({ error: "Internal server error" });
     }
 };
-// export const getAgendaById = async (req: TenantRequest, res: Response) => {
-//   const { agendaId } = req.params;
-//   const tenant = req.tenant;
-//   if (!tenant || !agendaId) {
-//     return res.status(400).json({ error: "Missing required fields" });
-//   }
-//   try {
-//     // Just get the agenda - no includes
-//     const agenda = await db.agenda.findFirst({
-//       where: {
-//         id: agendaId,
-//         tenantId: tenant.id,
-//       }
-//     });
-//     if (!agenda) {
-//       return res.status(404).json({ error: "Agenda not found" });
-//     }
-//     return res.status(200).json(agenda);
-//   } catch (error) {
-//     console.error("Error:", error);
-//     return res.status(500).json({ error: "Internal server error" });
-//   }
-// };
 export const getAgendaById = async (req, res) => {
     const { agendaId } = req.params;
     const tenant = req.tenant;

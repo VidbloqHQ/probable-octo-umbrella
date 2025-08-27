@@ -1,6 +1,12 @@
 import express from "express";
 import { singletonController } from "../utils/singleton-controller.js";
-import { createAgenda, getStreamAgenda, updateStreamAgenda, deleteAgenda, getAgendaById } from "../controllers/agenda.controller.js";
+import { 
+// createAgenda,
+// getStreamAgenda,
+updateStreamAgenda, deleteAgenda,
+// getAgendaById
+ } from "../controllers/agenda.controller.js";
+import { getAgendaById, createAgenda, getStreamAgenda } from "../controllers/new-agenda.js";
 const router = express.Router();
 router.post("/:streamId", singletonController('createAgenda', createAgenda));
 router.get("/stream/:streamId", singletonController('getStreamAgenda', getStreamAgenda));
