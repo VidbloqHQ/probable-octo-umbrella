@@ -61,33 +61,29 @@ export const getStreamParticipants = async (req, res) => {
         return res.status(400).json({ error: "Missing required fields" });
     }
     try {
-        // Direct call to Prisma - bypassing executeQuery
-        const stream = await db.stream.findFirst({
+        const participants = await db.participant.findMany({
             where: {
-                name: streamId,
-                tenantId: tenant.id,
+                stream: {
+                    name: streamId,
+                    tenantId: tenant.id
+                }
             },
             select: {
-                participants: {
-                    select: {
-                        id: true,
-                        userName: true,
-                        walletAddress: true,
-                        userType: true,
-                        avatarUrl: true,
-                        joinedAt: true,
-                        leftAt: true,
-                        totalPoints: true,
-                    },
-                    orderBy: { joinedAt: 'desc' },
-                    take: 50
-                }
+                id: true,
+                userName: true,
+                walletAddress: true,
+                userType: true,
+                avatarUrl: true,
+                joinedAt: true,
+                leftAt: true,
+                totalPoints: true
+            },
+            take: 100,
+            orderBy: {
+                joinedAt: 'desc'
             }
         });
-        if (!stream) {
-            return res.status(404).json({ error: "Stream not found" });
-        }
-        return res.status(200).json({ participants: stream.participants });
+        return res.status(200).json({ participants });
     }
     catch (error) {
         console.error("Error:", error);
