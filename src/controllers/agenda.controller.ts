@@ -1592,7 +1592,7 @@ export const getAgendaById = async (req: TenantRequest, res: Response) => {
   }
 
   try {
-    // Direct database call - no executeQuery wrapper
+    // Direct call to Prisma - bypassing executeQuery
     const agenda = await db.agenda.findFirst({
       where: {
         id: agendaId,
@@ -1606,7 +1606,7 @@ export const getAgendaById = async (req: TenantRequest, res: Response) => {
 
     return res.status(200).json(agenda);
   } catch (error) {
-    console.error("Direct query error:", error);
+    console.error("Error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 };

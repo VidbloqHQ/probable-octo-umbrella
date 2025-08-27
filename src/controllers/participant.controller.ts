@@ -78,14 +78,13 @@ export const getStreamParticipants = async (req: TenantRequest, res: Response) =
   }
 
   try {
-    // Direct database call - no executeQuery wrapper
+    // Direct call to Prisma - bypassing executeQuery
     const stream = await db.stream.findFirst({
       where: {
         name: streamId,
         tenantId: tenant.id,
       },
       select: {
-        id: true,
         participants: {
           select: {
             id: true,
@@ -109,7 +108,7 @@ export const getStreamParticipants = async (req: TenantRequest, res: Response) =
 
     return res.status(200).json({ participants: stream.participants });
   } catch (error) {
-    console.error("Direct query error:", error);
+    console.error("Error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 };
