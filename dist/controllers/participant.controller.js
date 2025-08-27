@@ -61,13 +61,14 @@ export const getStreamParticipants = async (req, res) => {
         return res.status(400).json({ error: "Missing required fields" });
     }
     try {
-        // Direct Prisma query - no raw SQL
+        // Direct database call - no executeQuery wrapper
         const stream = await db.stream.findFirst({
             where: {
                 name: streamId,
                 tenantId: tenant.id,
             },
             select: {
+                id: true,
                 participants: {
                     select: {
                         id: true,
@@ -87,9 +88,10 @@ export const getStreamParticipants = async (req, res) => {
         if (!stream) {
             return res.status(404).json({ error: "Stream not found" });
         }
-        return res.json({ participants: stream.participants });
+        return res.status(200).json({ participants: stream.participants });
     }
     catch (error) {
+        console.error("Direct query error:", error);
         return res.status(500).json({ error: "Internal server error" });
     }
 };

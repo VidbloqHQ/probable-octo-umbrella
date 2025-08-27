@@ -1587,10 +1587,12 @@ export const getAgendaById = async (req: TenantRequest, res: Response) => {
   const { agendaId } = req.params;
   const tenant = req.tenant;
   
-    if (!tenant || !agendaId) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
+  if (!tenant || !agendaId) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
   try {
+    // Direct database call - no executeQuery wrapper
     const agenda = await db.agenda.findFirst({
       where: {
         id: agendaId,
@@ -1602,11 +1604,13 @@ export const getAgendaById = async (req: TenantRequest, res: Response) => {
       return res.status(404).json({ error: "Agenda not found" });
     }
 
-    return res.json(agenda);
+    return res.status(200).json(agenda);
   } catch (error) {
+    console.error("Direct query error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 };
+
 /**
  * Helper function to validate content updates match the agenda type
  */
