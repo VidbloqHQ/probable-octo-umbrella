@@ -49,6 +49,7 @@ export const getStreamAgenda = async (req, res) => {
     const { streamId } = req.params;
     const tenant = req.tenant;
     let success = false;
+    console.log('[NEW-AGENDA] getStreamAgenda called at', Date.now());
     // Add pagination parameters
     const page = parseInt(req.query.page) || 1;
     const limit = Math.min(parseInt(req.query.limit) || 20, 50);
@@ -151,6 +152,7 @@ export const getAgendaDetails = async (req, res) => {
     const { agendaId } = req.params;
     const tenant = req.tenant;
     let success = false;
+    console.log('[NEW-AGENDA] getAgendaDetails called at', Date.now());
     try {
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
@@ -245,6 +247,7 @@ export const createAgenda = async (req, res) => {
     const { agendas, wallet } = req.body;
     const tenant = req.tenant;
     let success = false;
+    console.log('[NEW-AGENDA] createAgenda called at', Date.now());
     try {
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });

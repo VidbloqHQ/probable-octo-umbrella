@@ -14,6 +14,7 @@ export const getStreamParticipants = async (req, res) => {
     const { streamId } = req.params;
     const tenant = req.tenant;
     let success = false;
+    console.log('[NEW-PARTICIPANT] createParticipant called at', Date.now());
     // Add pagination parameters
     const page = parseInt(req.query.page) || 1;
     const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Max 100

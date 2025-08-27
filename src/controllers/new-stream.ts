@@ -50,6 +50,7 @@ export const createStream = async (req: TenantRequest, res: Response) => {
   } = req.body;
   const tenant = req.tenant;
   let success = false;
+  console.log('[NEW-STREAM] createStream called at', Date.now());
 
   try {
     const abortController = (req as any).abortController;
@@ -156,6 +157,7 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
   const { roomName, userName, wallet, avatarUrl } = req.body;
   const tenant = req.tenant;
   let success = false;
+  console.log('[NEW-STREAM] createStreamToken called at', Date.now());
 
   try {
     const abortController = (req as any).abortController;
@@ -381,6 +383,7 @@ export const getStream = async (req: TenantRequest, res: Response) => {
   const { streamId } = req.params;
   const tenant = req.tenant;
   let success = false;
+  console.log('[NEW-STREAM] getStream called at', Date.now());
 
   try {
     if (!tenant) {

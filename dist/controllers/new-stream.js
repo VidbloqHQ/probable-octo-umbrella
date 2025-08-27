@@ -25,6 +25,7 @@ export const createStream = async (req, res) => {
     const { wallet, callType = "video", scheduledFor, title, streamSessionType, fundingType, isPublic = true, } = req.body;
     const tenant = req.tenant;
     let success = false;
+    console.log('[NEW-STREAM] createStream called at', Date.now());
     try {
         const abortController = req.abortController;
         if (res.headersSent || abortController?.signal?.aborted) {
@@ -113,6 +114,7 @@ export const createStreamToken = async (req, res) => {
     const { roomName, userName, wallet, avatarUrl } = req.body;
     const tenant = req.tenant;
     let success = false;
+    console.log('[NEW-STREAM] createStreamToken called at', Date.now());
     try {
         const abortController = req.abortController;
         if (res.headersSent || abortController?.signal?.aborted) {
@@ -297,6 +299,7 @@ export const getStream = async (req, res) => {
     const { streamId } = req.params;
     const tenant = req.tenant;
     let success = false;
+    console.log('[NEW-STREAM] getStream called at', Date.now());
     try {
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });

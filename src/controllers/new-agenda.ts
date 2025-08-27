@@ -72,7 +72,8 @@ export const getStreamAgenda = async (
   const { streamId } = req.params;
   const tenant = req.tenant;
   let success = false;
-  
+  console.log('[NEW-AGENDA] getStreamAgenda called at', Date.now());
+
   // Add pagination parameters
   const page = parseInt(req.query.page as string) || 1;
   const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
@@ -189,6 +190,7 @@ export const getAgendaDetails = async (req: TenantRequest, res: Response) => {
   const { agendaId } = req.params;
   const tenant = req.tenant;
   let success = false;
+  console.log('[NEW-AGENDA] getAgendaDetails called at', Date.now());
 
   try {
     if (!tenant) {
@@ -298,6 +300,7 @@ export const createAgenda = async (req: TenantRequest, res: Response) => {
   const { agendas, wallet } = req.body;
   const tenant = req.tenant;
   let success = false;
+  console.log('[NEW-AGENDA] createAgenda called at', Date.now());
 
   try {
     if (!tenant) {
