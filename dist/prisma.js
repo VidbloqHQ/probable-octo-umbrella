@@ -17,9 +17,11 @@ const prismaClientSingleton = () => {
         connectionLimit: '10',
         statementTimeout: '10 seconds'
     });
+    console.log('[DB] Initializing Prisma Client');
+    const startInit = Date.now();
     return new PrismaClient({
         log: isProduction
-            ? ['error']
+            ? ['query', 'info', 'warn', 'error']
             : ['error', 'warn'],
         errorFormat: isProduction ? 'minimal' : 'pretty',
         datasources: {
@@ -28,6 +30,7 @@ const prismaClientSingleton = () => {
             }
         }
     });
+    // console.log(`[DB] Prisma Client initialized in ${Date.now() - startInit}ms`);
 };
 // Create single instance
 export const db = globalForPrisma.prisma ?? prismaClientSingleton();
@@ -35,18 +38,35 @@ if (process.env.NODE_ENV !== "production") {
     globalForPrisma.prisma = db;
 }
 // Connect with retry logic
-async function connectWithRetry(retries = 3) {
+// async function connectWithRetry(retries = 3) {
+//   for (let i = 0; i < retries; i++) {
+//     try {
+//       await db.$connect();
+//       console.log('✅ Database connected successfully');
+//       return;
+//     } catch (error) {
+//       console.error(`❌ Database connection attempt ${i + 1} failed:`, error);
+//       if (i === retries - 1) throw error;
+//       await new Promise(resolve => setTimeout(resolve, 2000));
+//     }
+//   }
+// }
+// In prisma.ts
+async function connectWithRetry(retries = 5) {
     for (let i = 0; i < retries; i++) {
         try {
             await db.$connect();
             console.log('✅ Database connected successfully');
+            // Test the connection
+            await db.$queryRaw `SELECT 1`;
             return;
         }
         catch (error) {
-            console.error(`❌ Database connection attempt ${i + 1} failed:`, error);
+            console.error(`Database connection attempt ${i + 1} failed:`, error);
             if (i === retries - 1)
                 throw error;
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            // Exponential backoff
+            await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
         }
     }
 }
@@ -60,6 +80,7 @@ class QueryQueue {
     activeQueries = 0;
     maxConcurrent = 15; // Reduced from 15 to prevent exhaustion
     async execute(fn) {
+        console.log(`[Queue] Active: ${this.activeQueries}, Queued: ${this.queue.length}`);
         while (this.activeQueries >= this.maxConcurrent) {
             await new Promise(resolve => {
                 this.queue.push(resolve);
@@ -86,53 +107,78 @@ class QueryQueue {
 }
 const queryQueue = new QueryQueue();
 // CRITICAL: Wrapper for queries with connection pool management
+// export async function executeQuery<T>(
+//   queryFn: () => Promise<T>,
+//   options: {
+//     maxRetries?: number;
+//     timeout?: number;
+//     retryDelay?: number;
+//   } = {}
+// ): Promise<T> {
+//   const { 
+//     maxRetries = 2,
+//     timeout = 10000, // Default 10 seconds
+//     retryDelay = 500
+//   } = options;
+//   // Use the queue to limit concurrent queries
+//   return queryQueue.execute(async () => {
+//     let lastError: any;
+//     for (let attempt = 0; attempt < maxRetries; attempt++) {
+//       try {
+//         // Create a promise that rejects after timeout
+//         const timeoutPromise = new Promise<never>((_, reject) => {
+//           setTimeout(() => reject(new Error('Query timeout')), timeout);
+//         });
+//         // Race between query and timeout
+//         const result = await Promise.race([
+//           queryFn(),
+//           timeoutPromise
+//         ]);
+//         return result as T;
+//       } catch (error: any) {
+//         lastError = error;
+//         // Log connection pool errors
+//         if (error.code === 'P2024') {
+//           console.error(`[Connection Pool] Exhausted at attempt ${attempt + 1}`);
+//         }
+//         // Errors that should trigger retry
+//         const retryableCodes = [
+//           'P2024', // Connection pool timeout
+//           'P2034', // Transaction write conflict
+//           'P1001', // Can't reach database server
+//           'P1002', // Database server timeout
+//           'TIMEOUT' // Our custom timeout
+//         ];
+//         const shouldRetry = retryableCodes.includes(error.code) || 
+//                             error.message === 'Query timeout';
+//         const isLastAttempt = attempt === maxRetries - 1;
+//         if (!shouldRetry || isLastAttempt) {
+//           throw error;
+//         }
+//         // Exponential backoff with jitter
+//         const delay = Math.min(
+//           retryDelay * Math.pow(2, attempt) + Math.random() * 200,
+//           5000
+//         );
+//         console.log(`[Retry ${attempt + 1}/${maxRetries}] Query failed with ${error.code}, retrying in ${delay}ms`);
+//         await new Promise(resolve => setTimeout(resolve, delay));
+//       }
+//     }
+//     throw lastError;
+//   });
+// }
 export async function executeQuery(queryFn, options = {}) {
-    const { maxRetries = 2, timeout = 10000, // Default 10 seconds
-    retryDelay = 500 } = options;
-    // Use the queue to limit concurrent queries
-    return queryQueue.execute(async () => {
-        let lastError;
-        for (let attempt = 0; attempt < maxRetries; attempt++) {
-            try {
-                // Create a promise that rejects after timeout
-                const timeoutPromise = new Promise((_, reject) => {
-                    setTimeout(() => reject(new Error('Query timeout')), timeout);
-                });
-                // Race between query and timeout
-                const result = await Promise.race([
-                    queryFn(),
-                    timeoutPromise
-                ]);
-                return result;
-            }
-            catch (error) {
-                lastError = error;
-                // Log connection pool errors
-                if (error.code === 'P2024') {
-                    console.error(`[Connection Pool] Exhausted at attempt ${attempt + 1}`);
-                }
-                // Errors that should trigger retry
-                const retryableCodes = [
-                    'P2024', // Connection pool timeout
-                    'P2034', // Transaction write conflict
-                    'P1001', // Can't reach database server
-                    'P1002', // Database server timeout
-                    'TIMEOUT' // Our custom timeout
-                ];
-                const shouldRetry = retryableCodes.includes(error.code) ||
-                    error.message === 'Query timeout';
-                const isLastAttempt = attempt === maxRetries - 1;
-                if (!shouldRetry || isLastAttempt) {
-                    throw error;
-                }
-                // Exponential backoff with jitter
-                const delay = Math.min(retryDelay * Math.pow(2, attempt) + Math.random() * 200, 5000);
-                console.log(`[Retry ${attempt + 1}/${maxRetries}] Query failed with ${error.code}, retrying in ${delay}ms`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        }
-        throw lastError;
-    });
+    const start = Date.now();
+    console.log('[DB] Starting query');
+    try {
+        const result = await queryFn();
+        console.log(`[DB] Query completed in ${Date.now() - start}ms`);
+        return result;
+    }
+    catch (error) {
+        console.log(`[DB] Query failed after ${Date.now() - start}ms`);
+        throw error;
+    }
 }
 // Export queue stats for monitoring
 export function getQueueStats() {

@@ -145,6 +145,22 @@ app.post("/test-token-direct", async (req: Request, res: Response) => {
     message: "Direct response - no middleware",
   });
 });
+// Add a test endpoint that bypasses all your middleware
+app.get('/test-direct', async (req, res) => {
+  const start = Date.now();
+  try {
+    const result = await db.$queryRaw`SELECT COUNT(*) FROM "Stream"`;
+    res.json({ 
+      time: Date.now() - start,
+      result 
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      error: (error as any)?.message,
+      time: Date.now() - start 
+    });
+  }
+});
 
 app.post("/stream/token-direct", async (req: Request, res: Response) => {
   const startTime = Date.now();

@@ -25,7 +25,10 @@ export const createStream = async (req, res) => {
     const { wallet, callType = "video", scheduledFor, title, streamSessionType, fundingType, isPublic = true, } = req.body;
     const tenant = req.tenant;
     let success = false;
-    console.log('[NEW-STREAM] createStream called at', Date.now());
+    const fullStart = Date.now();
+    console.log(`[TIMING] Request received`);
+    // Time each operation
+    console.log(`[TIMING] Starting tenant check`);
     try {
         const abortController = req.abortController;
         if (res.headersSent || abortController?.signal?.aborted) {
@@ -34,9 +37,12 @@ export const createStream = async (req, res) => {
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
+        console.log(`[TIMING] Tenant check: ${Date.now() - fullStart}ms`);
+        console.log(`[TIMING] Starting user upsert`);
         if (!wallet || !isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Valid wallet address required." });
         }
+        const userStart = Date.now();
         // Step 1: Upsert user first
         const user = await executeQuery(() => db.user.upsert({
             where: {
@@ -52,8 +58,11 @@ export const createStream = async (req, res) => {
                 points: 0,
             },
         }), { maxRetries: 2, timeout: 3000 });
+        console.log(`[TIMING] User upsert completed: ${Date.now() - userStart}ms`);
+        console.log(`[TIMING] Starting stream creation`);
         // Step 2: Generate guaranteed unique stream name (no DB check needed)
         const streamName = generateUniqueStreamName();
+        const streamStart = Date.now();
         // Step 3: Create stream
         const stream = await executeQuery(() => db.stream.create({
             data: {
@@ -73,6 +82,8 @@ export const createStream = async (req, res) => {
                 createdAt: new Date(),
             },
         }), { maxRetries: 2, timeout: 5000 });
+        console.log(`[TIMING] Stream creation completed: ${Date.now() - streamStart}ms`);
+        console.log(`[TIMING] Total request time: ${Date.now() - fullStart}ms`);
         // Step 4: Create LiveKit room asynchronously (fire and forget)
         setImmediate(() => {
             roomService
