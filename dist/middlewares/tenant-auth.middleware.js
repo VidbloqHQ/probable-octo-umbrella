@@ -163,6 +163,7 @@ export const authenticateTenant = async (req, res, next) => {
         return next();
     }
     const startTime = Date.now();
+    console.log(`[AUTH] Starting authentication`);
     let success = false;
     try {
         const apiKey = req.headers["x-api-key"];
@@ -191,6 +192,7 @@ export const authenticateTenant = async (req, res, next) => {
                     data: { lastUsedAt: new Date() },
                     select: { id: true }
                 }), { maxRetries: 1, timeout: 2000 }).catch(() => { });
+                console.log(`[AUTH] Authentication completed in ${Date.now() - startTime}ms`);
                 return next();
             }
             // Cache hit but secret not verified yet

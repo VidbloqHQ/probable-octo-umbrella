@@ -21,7 +21,7 @@ const prismaClientSingleton = () => {
     const startInit = Date.now();
     return new PrismaClient({
         log: isProduction
-            ? ['query', 'info', 'warn', 'error']
+            ? ['error']
             : ['error', 'warn'],
         errorFormat: isProduction ? 'minimal' : 'pretty',
         datasources: {

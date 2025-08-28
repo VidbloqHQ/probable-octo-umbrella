@@ -209,6 +209,7 @@ export const authenticateTenant = async (
   }
   
   const startTime = Date.now();
+  console.log(`[AUTH] Starting authentication`);
   let success = false;
   
   try {
@@ -246,7 +247,8 @@ export const authenticateTenant = async (
           }),
           { maxRetries: 1, timeout: 2000 }
         ).catch(() => {});
-        
+          console.log(`[AUTH] Authentication completed in ${Date.now() - startTime}ms`);
+
         return next();
       }
       
