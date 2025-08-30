@@ -5,8 +5,8 @@ import {
   // getStreamAgenda,
   updateStreamAgenda,
   deleteAgenda,
-  getAgenda,
-  getAgendaDetails,
+  // getAgenda,
+  // getAgendaDetails,
   // getAgendaById
 } from "../controllers/agenda.controller.js";
 import { getAgendaById, createAgenda, getStreamAgenda } from "../controllers/new-agenda.js";

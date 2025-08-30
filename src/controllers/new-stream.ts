@@ -25,14 +25,30 @@ const tenantConfigCache = new Map<string, { data: any; timestamp: number }>();
 const TENANT_CONFIG_CACHE_TTL = 300000; // 5 minutes
 
 /**
- * OPTIMIZED: Generate guaranteed unique stream name without database checks
+ * OPTIMIZED: Generate guaranteed unique stream name
+ * Format: "abc-def-xyz" (always 11 characters including dashes)
  */
 function generateUniqueStreamName(): string {
-  // Combine multiple entropy sources for guaranteed uniqueness
-  const base = generateMeetingLink();
-  const timestamp = Date.now().toString(36);
-  const random = Math.random().toString(36).substr(2, 5);
-  return `${base}-${timestamp}-${random}`;
+  // 6-character random base
+  const segments = 2;
+  const segmentLength = 3;
+  const charset = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  
+  function generateSegment(): string {
+    let segment = '';
+    for (let i = 0; i < segmentLength; i++) {
+      segment += charset[Math.floor(Math.random() * charset.length)];
+    }
+    return segment;
+  }
+  
+  const base = Array(segments).fill(null).map(() => generateSegment()).join('-');
+  
+  // 3-character timestamp suffix for uniqueness
+  const timestamp = Date.now() % 46656; // Ensures 3 chars in base36
+  const suffix = timestamp.toString(36).padStart(3, '0');
+  
+  return `${base}-${suffix}`;
 }
 
 /**
@@ -50,11 +66,11 @@ export const createStream = async (req: TenantRequest, res: Response) => {
   } = req.body;
   const tenant = req.tenant;
   let success = false;
-   const fullStart = Date.now();
-  console.log(`[TIMING] Request received`);
-  
-  // Time each operation
-  console.log(`[TIMING] Starting tenant check`);
+  // const fullStart = Date.now();
+  // console.log(`[TIMING] Request received`);
+
+  // // Time each operation
+  // console.log(`[TIMING] Starting tenant check`);
 
   try {
     const abortController = (req as any).abortController;
@@ -66,15 +82,15 @@ export const createStream = async (req: TenantRequest, res: Response) => {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
 
-     console.log(`[TIMING] Tenant check: ${Date.now() - fullStart}ms`);
-  
-  console.log(`[TIMING] Starting user upsert`);
+    // console.log(`[TIMING] Tenant check: ${Date.now() - fullStart}ms`);
+
+    // console.log(`[TIMING] Starting user upsert`);
 
     if (!wallet || !isValidWalletAddress(wallet)) {
       return res.status(400).json({ error: "Valid wallet address required." });
     }
 
-      const userStart = Date.now();
+    // const userStart = Date.now();
 
     // Step 1: Upsert user first
     const user = await executeQuery(
@@ -95,12 +111,12 @@ export const createStream = async (req: TenantRequest, res: Response) => {
         }),
       { maxRetries: 2, timeout: 3000 }
     );
-  console.log(`[TIMING] User upsert completed: ${Date.now() - userStart}ms`);
-  console.log(`[TIMING] Starting stream creation`);
+    // console.log(`[TIMING] User upsert completed: ${Date.now() - userStart}ms`);
+    // console.log(`[TIMING] Starting stream creation`);
 
     // Step 2: Generate guaranteed unique stream name (no DB check needed)
     const streamName = generateUniqueStreamName();
-const streamStart = Date.now();
+    // const streamStart = Date.now();
     // Step 3: Create stream
     const stream = await executeQuery(
       () =>
@@ -124,9 +140,11 @@ const streamStart = Date.now();
         }),
       { maxRetries: 2, timeout: 5000 }
     );
-     console.log(`[TIMING] Stream creation completed: ${Date.now() - streamStart}ms`);
-  
-  console.log(`[TIMING] Total request time: ${Date.now() - fullStart}ms`);
+    // console.log(
+    //   `[TIMING] Stream creation completed: ${Date.now() - streamStart}ms`
+    // );
+
+    // console.log(`[TIMING] Total request time: ${Date.now() - fullStart}ms`);
 
     // Step 4: Create LiveKit room asynchronously (fire and forget)
     setImmediate(() => {
@@ -172,7 +190,7 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
   const { roomName, userName, wallet, avatarUrl } = req.body;
   const tenant = req.tenant;
   let success = false;
-  console.log('[NEW-STREAM] createStreamToken called at', Date.now());
+  // console.log("[NEW-STREAM] createStreamToken called at", Date.now());
 
   try {
     const abortController = (req as any).abortController;
@@ -398,7 +416,7 @@ export const getStream = async (req: TenantRequest, res: Response) => {
   const { streamId } = req.params;
   const tenant = req.tenant;
   let success = false;
-  console.log('[NEW-STREAM] getStream called at', Date.now());
+  // console.log("[NEW-STREAM] getStream called at", Date.now());
 
   try {
     if (!tenant) {
