@@ -4,5 +4,9 @@ import { createTransaction, submitTransaction } from "../controllers/payment.con
 import { singletonController } from "../utils/singleton-controller.js";
 const router = express.Router();
 router.post("/", singletonController('createTransaction', createTransaction));
-router.post("/submit", singletonController('submitTransaction', submitTransaction));
+// router.post("/submit", singletonController('submitTransaction', submitTransaction))
+router.post("/submit", (req, res, next) => {
+    req.customTimeout = 45000; // 45 seconds for this endpoint only
+    next();
+}, singletonController('submitTransaction', submitTransaction));
 export default router;
