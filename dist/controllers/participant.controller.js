@@ -9,60 +9,89 @@ import { wss } from "../app.js";
 const participantCache = new Map();
 const PARTICIPANT_CACHE_TTL = 30000; // 30 seconds
 /**
- * Controller for getting all stream participants - FIXED WITH SINGLE RESPONSE
+ * OPTIMIZED: Get stream participants with pagination and caching
  */
 export const getStreamParticipants = async (req, res) => {
     const { streamId } = req.params;
     const tenant = req.tenant;
-    if (!tenant || !streamId) {
-        return res.status(400).json({ error: "Missing required fields" });
-    }
+    let success = false;
+    console.log('[NEW-PARTICIPANT] createParticipant called at', Date.now());
+    // Add pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100); // Max 100
+    const skip = (page - 1) * limit;
     try {
-        const participants = await db.participant.findMany({
-            where: {
-                stream: {
-                    name: streamId,
-                    tenantId: tenant.id
+        if (!tenant || !streamId) {
+            return res.status(400).json({ error: "Missing required fields" });
+        }
+        // Check cache first
+        const cacheKey = `${tenant.id}:${streamId}:participants:${page}:${limit}`;
+        const cached = participantCache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < PARTICIPANT_CACHE_TTL) {
+            success = true;
+            return res.status(200).json(cached.data);
+        }
+        // OPTIMIZED: Use parallel queries for count and data
+        const [participants, totalCount] = await Promise.all([
+            executeQuery(() => db.participant.findMany({
+                where: {
+                    stream: {
+                        name: streamId,
+                        tenantId: tenant.id
+                    }
+                },
+                select: {
+                    id: true,
+                    userName: true,
+                    walletAddress: true,
+                    userType: true,
+                    avatarUrl: true,
+                    joinedAt: true,
+                    leftAt: true,
+                    totalPoints: true
+                },
+                take: limit,
+                skip: skip,
+                orderBy: {
+                    joinedAt: 'desc'
                 }
-            },
-            select: {
-                id: true,
-                userName: true,
-                walletAddress: true,
-                userType: true,
-                avatarUrl: true,
-                joinedAt: true,
-                leftAt: true,
-                totalPoints: true
-            },
-            take: 100,
-            orderBy: {
-                joinedAt: 'desc'
+            }), { maxRetries: 1, timeout: 2000 }),
+            executeQuery(() => db.participant.count({
+                where: {
+                    stream: {
+                        name: streamId,
+                        tenantId: tenant.id
+                    }
+                }
+            }), { maxRetries: 1, timeout: 1000 })
+        ]);
+        const result = {
+            participants,
+            pagination: {
+                page,
+                limit,
+                total: totalCount,
+                totalPages: Math.ceil(totalCount / limit)
             }
-        });
-        return res.status(200).json({ participants });
+        };
+        // Cache the result
+        participantCache.set(cacheKey, { data: result, timestamp: Date.now() });
+        success = true;
+        return res.status(200).json(result);
     }
     catch (error) {
-        console.error("Error:", error);
+        console.error("Error fetching participants:", error);
+        if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+            return res.status(504).json({
+                error: "Database query timeout",
+                message: "The request took too long. Please try again."
+            });
+        }
         return res.status(500).json({ error: "Internal server error" });
     }
-};
-export const getStreamParticipantsTest = async (req, res) => {
-    const { streamId } = req.params;
-    const tenant = req.tenant;
-    if (!tenant || !streamId) {
-        return res.status(400).json({ error: "Bad request" });
+    finally {
+        trackQuery(success);
     }
-    const participants = await db.participant.findMany({
-        where: {
-            stream: {
-                name: streamId,
-                tenantId: tenant.id
-            }
-        },
-        take: 50
-    });
-    return res.json({ participants });
 };
 /**
  * Controller for updating participant permissions - FIXED
@@ -395,23 +424,26 @@ export const updateParticipantLeftTime = async (req, res) => {
             return res.status(400).json({ error: "Invalid wallet address format." });
         }
         // Get stream with reduced timeout
-        const stream = await executeQuery(() => db.stream.findFirst({
-            where: {
-                name: streamId,
-                tenantId: tenant.id,
-            },
-            select: {
-                id: true
-            }
-        }), { maxRetries: 1, timeout: 2000 });
-        if (!stream) {
-            console.log(`Stream not found: ${streamId}`);
-            return res.status(404).json({ error: `Stream not found` });
-        }
+        // const stream = await executeQuery(
+        //   () => db.stream.findFirst({
+        //     where: {
+        //       name: streamId,
+        //       tenantId: tenant.id,
+        //     },
+        //     select: {
+        //       id: true
+        //     }
+        //   }),
+        //   { maxRetries: 1, timeout: 2000 }
+        // );
+        // if (!stream) {
+        //   console.log(`Stream not found: ${streamId}`);
+        //   return res.status(404).json({ error: `Stream not found` });
+        // }
         // Update all matching participants (single operation)
         const updateResult = await executeQuery(() => db.participant.updateMany({
             where: {
-                streamId: stream.id,
+                streamId,
                 walletAddress: wallet,
                 tenantId: tenant.id,
                 leftAt: null // Only update those not already marked as left

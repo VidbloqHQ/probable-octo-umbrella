@@ -7,16 +7,16 @@ const POLL_CACHE_TTL = 10000; // 10 seconds - short because polls are live
  * Controller for submitting a poll vote - REFACTORED WITHOUT TRANSACTIONS
  */
 export const submitPollVote = async (req, res) => {
-    const { agendaId, selectedOption, wallet } = req.body;
+    const { agendaId, selectedOption, wallet, streamId } = req.body;
     const tenant = req.tenant;
     let success = false;
     try {
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
-        if (!agendaId || !selectedOption || !wallet) {
+        if (!agendaId || !selectedOption || !wallet || !streamId) {
             return res.status(400).json({
-                error: "Missing required fields: agendaId, selectedOption, or wallet"
+                error: "Missing required fields: agendaId, selectedOption, wallet, or streamId"
             });
         }
         if (!isValidWalletAddress(wallet)) {
@@ -29,6 +29,7 @@ export const submitPollVote = async (req, res) => {
                     id: agendaId,
                     tenantId: tenant.id,
                     action: "Poll",
+                    streamId: streamId,
                 },
                 include: {
                     pollContent: true,
@@ -41,6 +42,7 @@ export const submitPollVote = async (req, res) => {
                 where: {
                     walletAddress: wallet,
                     tenantId: tenant.id,
+                    streamId: streamId,
                     leftAt: null // Only active participants
                 },
                 select: {
@@ -330,6 +332,101 @@ export const getUserPollVote = async (req, res) => {
     }
     catch (error) {
         console.error("Error fetching user poll vote:", error);
+        return res.status(500).json({
+            error: "Internal server error",
+        });
+    }
+    finally {
+        trackQuery(success);
+    }
+};
+// Cache for poll content
+const pollContentCache = new Map();
+const POLL_CONTENT_CACHE_TTL = 30000; // 30 seconds for polls since they're live
+/**
+ * Controller for getting poll content - OPTIMIZED
+ * Similar to getQuizQuestions but for polls
+ */
+export const getPollContent = async (req, res) => {
+    const { agendaId } = req.params;
+    const tenant = req.tenant;
+    let success = false;
+    try {
+        // 1. Tenant verification
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        // 2. Input validation
+        if (!agendaId) {
+            return res.status(400).json({ error: "Missing agenda ID" });
+        }
+        // 3. Check cache first
+        const cacheKey = `${tenant.id}:poll:${agendaId}:content`;
+        const cached = pollContentCache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < POLL_CONTENT_CACHE_TTL) {
+            success = true;
+            return res.status(200).json(cached.data);
+        }
+        // 4. Get poll from database - minimal fields only
+        const agenda = await executeQuery(() => db.agenda.findFirst({
+            where: {
+                id: agendaId,
+                tenantId: tenant.id,
+                action: "Poll"
+            },
+            select: {
+                id: true,
+                title: true,
+                description: true,
+                duration: true,
+                isCompleted: true,
+                pollContent: {
+                    select: {
+                        id: true,
+                        options: true,
+                        totalVotes: true
+                    }
+                },
+                _count: {
+                    select: {
+                        participantResponses: true
+                    }
+                }
+            }
+        }), { maxRetries: 1, timeout: 1500 });
+        if (!agenda || !agenda.pollContent) {
+            return res.status(404).json({
+                error: "Poll not found",
+                details: `Agenda ${agendaId} is not a poll or does not exist`
+            });
+        }
+        // 5. Format the response
+        const result = {
+            id: agenda.id,
+            title: agenda.title,
+            description: agenda.description,
+            duration: agenda.duration,
+            isCompleted: agenda.isCompleted,
+            pollContent: {
+                id: agenda.pollContent.id,
+                options: agenda.pollContent.options,
+                totalVotes: agenda.pollContent.totalVotes
+            },
+            responseCount: agenda._count?.participantResponses || 0
+        };
+        // Cache the result
+        pollContentCache.set(cacheKey, { data: result, timestamp: Date.now() });
+        success = true;
+        return res.status(200).json(result);
+    }
+    catch (error) {
+        console.error("Error fetching poll content:", error);
+        if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+            return res.status(504).json({
+                error: "Database query timeout",
+                message: "The request took too long. Please try again."
+            });
+        }
         return res.status(500).json({
             error: "Internal server error",
         });

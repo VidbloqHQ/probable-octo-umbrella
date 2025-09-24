@@ -1,8 +1,8 @@
 import express from "express";
 import {
-  // createStream,
-  // createStreamToken,
-  // getStream,
+  createStream,
+  createStreamToken,
+  getStream,
   recordStream,
   stopYoutubeStream,
   streamToYoutube,
@@ -12,7 +12,7 @@ import {
 // import { safeController } from "../middlewares/request-lock.middleware.js";
 import { singletonController } from "../utils/singleton-controller.js";
 // import { authenticateTenant } from "../middlewares/tenant-auth.middleware.js";
-import { createStream, getStream, createStreamToken } from "../controllers/new-stream.js";
+// import { createStream, getStream, createStreamToken } from "../controllers/new-stream.js";
 
 const router = express.Router();
 

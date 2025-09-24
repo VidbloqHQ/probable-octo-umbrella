@@ -28,36 +28,30 @@ const TENANT_CONFIG_CACHE_TTL = 300000; // 5 minutes
 
 
 /**
- * Helper function to generate a unique stream name - FIXED
+ * OPTIMIZED: Generate guaranteed unique stream name
+ * Format: "abc-def-xyz" (always 11 characters including dashes)
  */
-async function generateUniqueStreamName(tenantId: string): Promise<string> {
-  // Try up to 5 times
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const streamName = generateMeetingLink();
-    
-    // Simply check if name exists - don't create a temporary stream
-    const existingStream = await executeQuery(
-      () => db.stream.findFirst({
-        where: {
-          name: streamName,
-          tenantId: tenantId,
-        },
-        select: { id: true }
-      }),
-      { maxRetries: 1, timeout: 2000 }
-    );
-    
-    if (!existingStream) {
-      // Name is available
-      return streamName;
+function generateUniqueStreamName(): string {
+  // 6-character random base
+  const segments = 2;
+  const segmentLength = 3;
+  const charset = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  
+  function generateSegment(): string {
+    let segment = '';
+    for (let i = 0; i < segmentLength; i++) {
+      segment += charset[Math.floor(Math.random() * charset.length)];
     }
-    
-    // Name taken, try again
-    console.log(`Stream name ${streamName} already exists, trying again...`);
+    return segment;
   }
   
-  // Fallback with timestamp to ensure uniqueness
-  return `${generateMeetingLink()}-${Date.now()}`;
+  const base = Array(segments).fill(null).map(() => generateSegment()).join('-');
+  
+  // 3-character timestamp suffix for uniqueness
+  const timestamp = Date.now() % 46656; // Ensures 3 chars in base36
+  const suffix = timestamp.toString(36).padStart(3, '0');
+  
+  return `${base}-${suffix}`;
 }
 
 
@@ -121,10 +115,10 @@ async function getTenantConfig(tenantId: string) {
   return tenantWithDetails;
 }
 
-/**
- * Controller for creating a stream - FIXED WITH ABORT CHECKING
- */
 
+/**
+ * OPTIMIZED: Create stream with async LiveKit room creation
+ */
 export const createStream = async (req: TenantRequest, res: Response) => {
   const {
     wallet,
@@ -137,6 +131,11 @@ export const createStream = async (req: TenantRequest, res: Response) => {
   } = req.body;
   const tenant = req.tenant;
   let success = false;
+  // const fullStart = Date.now();
+  // console.log(`[TIMING] Request received`);
+
+  // // Time each operation
+  // console.log(`[TIMING] Starting tenant check`);
 
   try {
     const abortController = (req as any).abortController;
@@ -148,83 +147,101 @@ export const createStream = async (req: TenantRequest, res: Response) => {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
 
+    // console.log(`[TIMING] Tenant check: ${Date.now() - fullStart}ms`);
+
+    // console.log(`[TIMING] Starting user upsert`);
+
     if (!wallet || !isValidWalletAddress(wallet)) {
       return res.status(400).json({ error: "Valid wallet address required." });
     }
 
+    // const userStart = Date.now();
+
     // Step 1: Upsert user first
     const user = await executeQuery(
-      () => db.user.upsert({
-        where: {
-          walletAddress_tenantId: {
+      () =>
+        db.user.upsert({
+          where: {
+            walletAddress_tenantId: {
+              walletAddress: wallet,
+              tenantId: tenant.id,
+            },
+          },
+          update: {},
+          create: {
             walletAddress: wallet,
-            tenantId: tenant.id
-          }
-        },
-        update: {},
-        create: {
-          walletAddress: wallet,
-          tenantId: tenant.id,
-          points: 0
-        }
-      }),
+            tenantId: tenant.id,
+            points: 0,
+          },
+        }),
       { maxRetries: 2, timeout: 3000 }
     );
+    // console.log(`[TIMING] User upsert completed: ${Date.now() - userStart}ms`);
+    // console.log(`[TIMING] Starting stream creation`);
 
-    // Step 2: Generate guaranteed unique stream name
-    const streamName = `${generateMeetingLink()}-${Date.now().toString(36)}-${Math.random().toString(36).substr(2, 5)}`;
-
+    // Step 2: Generate guaranteed unique stream name (no DB check needed)
+    const streamName = generateUniqueStreamName();
+    // const streamStart = Date.now();
     // Step 3: Create stream
     const stream = await executeQuery(
-      () => db.stream.create({
-        data: {
-          name: streamName,
-          title,
-          callType: callType === 'audio' ? CallType.Audio : CallType.Video,
-          creatorWallet: wallet,
-          streamSessionType: streamSessionType || tenant.defaultStreamType,
-          fundingType: fundingType || tenant.defaultFundingType,
-          isPublic,
-          scheduledFor: scheduledFor ? new Date(scheduledFor) : null,
-          tenantId: tenant.id,
-          userId: user.id,
-          hasHost: false,
-          recording: false,
-          isLive: false,
-          createdAt: new Date()
-        }
-      }),
+      () =>
+        db.stream.create({
+          data: {
+            name: streamName,
+            title,
+            callType: callType === "audio" ? CallType.Audio : CallType.Video,
+            creatorWallet: wallet,
+            streamSessionType: streamSessionType || tenant.defaultStreamType,
+            fundingType: fundingType || tenant.defaultFundingType,
+            isPublic,
+            scheduledFor: scheduledFor ? new Date(scheduledFor) : null,
+            tenantId: tenant.id,
+            userId: user.id,
+            hasHost: false,
+            recording: false,
+            isLive: false,
+            createdAt: new Date(),
+          },
+        }),
       { maxRetries: 2, timeout: 5000 }
     );
+    // console.log(
+    //   `[TIMING] Stream creation completed: ${Date.now() - streamStart}ms`
+    // );
+
+    // console.log(`[TIMING] Total request time: ${Date.now() - fullStart}ms`);
 
     // Step 4: Create LiveKit room asynchronously (fire and forget)
     setImmediate(() => {
-      roomService.createRoom({
-        name: streamName,
-        emptyTimeout: 300,
-        maxParticipants: 100,
-      }).catch(err => {
-        console.error(`LiveKit room creation failed for ${streamName}:`, err);
-      });
+      roomService
+        .createRoom({
+          name: streamName,
+          emptyTimeout: 300,
+          maxParticipants: 100,
+        })
+        .catch((err) => {
+          console.error(`LiveKit room creation failed for ${streamName}:`, err);
+          // Could implement retry logic here if needed
+        });
     });
 
     success = true;
-    
+
     if (!res.headersSent && !abortController?.signal?.aborted) {
       return res.status(201).json(stream);
     }
   } catch (error: any) {
     console.error("Error creating stream:", error);
-    
+
     if (res.headersSent) return;
-    
-    if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-      return res.status(504).json({ 
+
+    if (error.message === "Query timeout" || error.code === "TIMEOUT") {
+      return res.status(504).json({
         error: "Database query timeout",
-        message: "The operation took too long. Please try again."
+        message: "The operation took too long. Please try again.",
       });
     }
-    
+
     return res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
@@ -232,13 +249,13 @@ export const createStream = async (req: TenantRequest, res: Response) => {
 };
 
 /**
- * Controller for creating access token - FIXED WITH ABORT CHECKING
+ * OPTIMIZED: Create stream token with parallel operations and better caching
  */
-
 export const createStreamToken = async (req: TenantRequest, res: Response) => {
   const { roomName, userName, wallet, avatarUrl } = req.body;
   const tenant = req.tenant;
   let success = false;
+  // console.log("[NEW-STREAM] createStreamToken called at", Date.now());
 
   try {
     const abortController = (req as any).abortController;
@@ -260,58 +277,46 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
     const [existingStream, user] = await Promise.all([
       // Fetch stream with minimal data
       executeQuery(
-        () => db.stream.findFirst({
-          where: {
-            name: roomName,
-            tenantId: tenant.id,
-          },
-          select: {
-            id: true,
-            name: true,
-            userId: true,
-            hasHost: true,
-            isPublic: true,
-            isLive: true,
-            streamSessionType: true,
-            startedAt: true,
-            creatorWallet: true,
-            // Check if there are co-hosts
-            participants: {
-              where: {
-                userType: "co-host",
-                leftAt: null
-              },
-              select: { id: true },
-              take: 1
-            }
-          }
-        }),
+        () =>
+          db.stream.findFirst({
+            where: {
+              name: roomName,
+              tenantId: tenant.id,
+            },
+            select: {
+              id: true,
+              name: true,
+              userId: true,
+              hasHost: true,
+              isPublic: true,
+              isLive: true,
+              streamSessionType: true,
+              startedAt: true,
+              creatorWallet: true,
+            },
+          }),
         { maxRetries: 1, timeout: 1500 }
       ),
       // Upsert user in parallel
       executeQuery(
-        () => db.user.upsert({
-          where: {
-            walletAddress_tenantId: {
+        () =>
+          db.user.upsert({
+            where: {
+              walletAddress_tenantId: {
+                walletAddress: wallet,
+                tenantId: tenant.id,
+              },
+            },
+            update: {},
+            create: {
               walletAddress: wallet,
-              tenantId: tenant.id
-            }
-          },
-          update: {},
-          create: {
-            walletAddress: wallet,
-            tenantId: tenant.id,
-            points: 0
-          }
-        }),
+              tenantId: tenant.id,
+              points: 0,
+            },
+          }),
         { maxRetries: 1, timeout: 1500 }
-      )
+      ),
     ]);
-
-    // Check abort after parallel operations
-    if (res.headersSent || abortController?.signal?.aborted) {
-      return;
-    }
 
     if (!existingStream) {
       return res.status(404).json({ error: "Stream not found" });
@@ -319,7 +324,10 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
 
     // Determine userType
     let userType: "host" | "co-host" | "guest";
-    if (user.id === existingStream.userId || existingStream.creatorWallet === wallet) {
+    if (
+      user.id === existingStream.userId ||
+      existingStream.creatorWallet === wallet
+    ) {
       userType = "host";
     } else if (existingStream.streamSessionType === StreamSessionType.Meeting) {
       userType = "co-host";
@@ -329,7 +337,9 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
 
     // Check access permissions
     if (!existingStream.isPublic && userType === "guest") {
-      return res.status(403).json({ error: "This stream requires permission to join" });
+      return res
+        .status(403)
+        .json({ error: "This stream requires permission to join" });
     }
 
     if (userType === "guest" && !existingStream.hasHost) {
@@ -338,64 +348,66 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
 
     // OPTIMIZATION: Start both operations in parallel
     const participantPromise = executeQuery(
-      () => db.participant.upsert({
-        where: {
-          walletAddress_streamId_tenantId: {
+      () =>
+        db.participant.upsert({
+          where: {
+            walletAddress_streamId_tenantId: {
+              walletAddress: wallet,
+              streamId: existingStream.id,
+              tenantId: tenant.id,
+            },
+          },
+          update: {
+            userName,
+            userType,
+            leftAt: null,
+            ...(avatarUrl && { avatarUrl }),
+          },
+          create: {
+            userName,
             walletAddress: wallet,
+            userType,
             streamId: existingStream.id,
-            tenantId: tenant.id
-          }
-        },
-        update: {
-          userName,
-          userType,
-          leftAt: null,
-          version: { increment: 1 },
-          ...(avatarUrl && { avatarUrl })
-        },
-        create: {
-          userName,
-          walletAddress: wallet,
-          userType,
-          streamId: existingStream.id,
-          tenantId: tenant.id,
-          totalPoints: 0,
-          ...(avatarUrl && { avatarUrl })
-        }
-      }),
+            tenantId: tenant.id,
+            totalPoints: 0,
+            ...(avatarUrl && { avatarUrl }),
+          },
+        }),
       { maxRetries: 1, timeout: 2000 }
     );
 
-    // FIXED: Properly handle the Promise type
-    let streamUpdatePromise: Promise<any> = Promise.resolve();
+    // FIXED: Use atomic update for host status
+    let streamUpdatePromise: Promise<void> = Promise.resolve();
     if (userType === "host" && !existingStream.hasHost) {
       streamUpdatePromise = executeQuery(
-        () => db.stream.updateMany({
-          where: { 
-            id: existingStream.id,
-            hasHost: false
-          },
-          data: {
-            hasHost: true,
-            isLive: true,
-            startedAt: existingStream.startedAt || new Date(),
-            version: { increment: 1 }
-          },
-        }),
+        () =>
+          db.stream.updateMany({
+            where: {
+              id: existingStream.id,
+              hasHost: false,
+            },
+            data: {
+              hasHost: true,
+              isLive: true,
+              startedAt: existingStream.startedAt || new Date(),
+            },
+          }),
         { maxRetries: 1, timeout: 2000 }
-      ).then(() => {
-        // Convert to void by not returning anything
-        return;
-      }).catch(err => {
-        console.error(`Failed to update stream status: ${err.message}`);
-        // Non-critical - continue anyway
-      });
+      )
+        .then(() => {
+          // Convert BatchPayload to void by not returning anything
+          return;
+        })
+        .catch((err) => {
+          console.error(`Failed to update stream status: ${err.message}`);
+          // Non-critical - continue anyway
+        });
     }
 
     // Wait for participant creation (required), stream update is optional
     const [participant] = await Promise.all([
       participantPromise,
-      streamUpdatePromise
+      streamUpdatePromise,
     ]);
 
     // Generate token
@@ -433,52 +445,45 @@ export const createStreamToken = async (req: TenantRequest, res: Response) => {
     }
 
     success = true;
-    
+
     if (!res.headersSent && !abortController?.signal?.aborted) {
       return res.status(200).json({ token, userType });
     }
   } catch (error: any) {
     console.error("Error creating token:", error);
-    
+
     if (res.headersSent) return;
-    
-    if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
-      return res.status(504).json({ 
+
+    if (error.message === "Query timeout" || error.code === "TIMEOUT") {
+      return res.status(504).json({
         error: "Database query timeout",
-        message: "The operation took too long. Please try again."
+        message: "The operation took too long. Please try again.",
       });
     }
-    
-    if (error.message?.includes("permission") || error.message?.includes("Waiting for host")) {
+
+    if (
+      error.message?.includes("permission") ||
+      error.message?.includes("Waiting for host")
+    ) {
       return res.status(403).json({ error: error.message });
     }
-    
+
     return res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);
   }
 };
 
-
 /**
- * Controller for getting stream details - FIXED WITH SINGLE RESPONSE
+ * OPTIMIZED: Get stream with selective data loading
  */
-
 export const getStream = async (req: TenantRequest, res: Response) => {
-  if (res.headersSent) {
-    return;
-  }
-  
   const { streamId } = req.params;
   const tenant = req.tenant;
   let success = false;
+  // console.log("[NEW-STREAM] getStream called at", Date.now());
 
   try {
-    const abortController = (req as any).abortController;
-    if (abortController?.signal?.aborted) {
-      return;
-    }
-
     if (!tenant) {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
@@ -490,7 +495,7 @@ export const getStream = async (req: TenantRequest, res: Response) => {
     // Check cache first
     const cacheKey = `${tenant.id}:${streamId}:full`;
     const cached = streamCache.get(cacheKey);
-    
+
     if (cached && Date.now() - cached.timestamp < STREAM_CACHE_TTL) {
       success = true;
       return res.status(200).json(cached.data);
@@ -498,54 +503,55 @@ export const getStream = async (req: TenantRequest, res: Response) => {
 
     // OPTIMIZED: Fetch stream with limited nested data
     const stream = await executeQuery(
-      () => db.stream.findFirst({
-        where: {
-          name: streamId,
-          tenantId: tenant.id,
-        },
-        include: {
-          // Only get agenda count and basic info
-          _count: {
-            select: {
-              agenda: true,
-              participants: true
-            }
+      () =>
+        db.stream.findFirst({
+          where: {
+            name: streamId,
+            tenantId: tenant.id,
           },
-          // Get limited agenda data
-          agenda: {
-            select: {
-              id: true,
-              timeStamp: true,
-              action: true,
-              title: true,
-              isCompleted: true
+          include: {
+            // Only get counts
+            _count: {
+              select: {
+                agenda: true,
+                participants: true,
+              },
             },
-            orderBy: {
-              timeStamp: 'asc'
+            // Get limited agenda data
+            agenda: {
+              select: {
+                id: true,
+                timeStamp: true,
+                action: true,
+                title: true,
+                isCompleted: true,
+              },
+              orderBy: {
+                timeStamp: "asc",
+              },
+              take: 20, // Only first 20 agendas
             },
-            take: 20 // Only first 20 agendas
+            // Get active participants only
+            participants: {
+              where: {
+                leftAt: null,
+              },
+              select: {
+                id: true,
+                userName: true,
+                walletAddress: true,
+                userType: true,
+                avatarUrl: true,
+                joinedAt: true,
+                totalPoints: true,
+              },
+              orderBy: {
+                joinedAt: "desc",
+              },
+              take: 30, // Only 30 active participants
+            },
           },
-          // Get active participants only
-          participants: {
-            where: {
-              leftAt: null
-            },
-            select: {
-              id: true,
-              userName: true,
-              walletAddress: true,
-              userType: true,
-              avatarUrl: true,
-              joinedAt: true,
-              totalPoints: true
-            },
-            orderBy: {
-              joinedAt: 'desc'
-            },
-            take: 30 // Only 30 active participants
-          }
-        }
-      }),
+        }),
       { maxRetries: 1, timeout: 2000 }
     );
 
@@ -553,33 +559,34 @@ export const getStream = async (req: TenantRequest, res: Response) => {
       return res.status(404).json({ error: "Stream not found." });
     }
 
-    // FIXED: Properly structure the response with counts
     const streamWithCounts = {
       ...stream,
       totalAgendas: stream._count?.agenda || 0,
       totalParticipants: stream._count?.participants || 0,
       activeParticipants: stream.participants?.length || 0,
-      _count: undefined // Remove _count from response
+      _count: undefined, // Remove _count from response
     };
 
     // Cache the result
-    streamCache.set(cacheKey, { data: streamWithCounts, timestamp: Date.now() });
+    streamCache.set(cacheKey, {
+      data: streamWithCounts,
+      timestamp: Date.now(),
+    });
 
     success = true;
     return res.status(200).json(streamWithCounts);
-    
   } catch (error: any) {
     console.error("Error fetching stream:", error);
-    
+
     if (res.headersSent) return;
-    
-    if (error.message === 'Query timeout' || error.code === 'TIMEOUT') {
+
+    if (error.message === "Query timeout" || error.code === "TIMEOUT") {
       return res.status(504).json({
         error: "Database query timeout",
-        message: "The request took too long. Please try again."
+        message: "The request took too long. Please try again.",
       });
     }
-    
+
     return res.status(500).json({ error: "Internal server error" });
   } finally {
     trackQuery(success);

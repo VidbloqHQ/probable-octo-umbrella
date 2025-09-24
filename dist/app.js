@@ -1,6 +1,6 @@
 import express from "express";
 import { createServer } from "http";
-import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter, } from "./routes/index.js";
+import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter, QArouter } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 import { requestLockMiddleware, timeoutMiddleware, } from "./middlewares/request-lock.middleware.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
@@ -378,6 +378,7 @@ app.use("/poll", PollRouter.default);
 app.use("/participant", ParticipantRouter.default);
 app.use("/quiz", QuizRouter.default);
 app.use("/program", ProgramRouter.default);
+app.use("/qa", QArouter.default);
 // ============================================
 // 404 HANDLER
 // ============================================

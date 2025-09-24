@@ -8,20 +8,22 @@ const QUIZ_CACHE_TTL = 60000; // 1 minute
  */
 export const submitQuizAnswers = async (req, res) => {
     const { agendaId } = req.params;
-    const { wallet, answers, totalScore } = req.body;
+    const { wallet, answers, totalScore, streamId } = req.body;
     const tenant = req.tenant;
     let success = false;
     try {
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
-        if (!agendaId || !wallet || !answers || !Array.isArray(answers)) {
+        if (!agendaId || !wallet || !answers || !Array.isArray(answers) || !streamId) {
             return res.status(400).json({
-                error: "Missing required fields: agendaId, wallet, or answers array"
+                error: "Missing required fields: agendaId, wallet, answers array, or streamId",
             });
         }
-        if (typeof totalScore !== 'number' || totalScore < 0) {
-            return res.status(400).json({ error: "Invalid totalScore (must be a non-negative number)" });
+        if (typeof totalScore !== "number" || totalScore < 0) {
+            return res
+                .status(400)
+                .json({ error: "Invalid totalScore (must be a non-negative number)" });
         }
         if (!isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Invalid wallet address format." });
@@ -32,49 +34,58 @@ export const submitQuizAnswers = async (req, res) => {
                 where: {
                     id: agendaId,
                     tenantId: tenant.id,
-                    action: "Quiz"
+                    action: "Quiz",
+                    streamId: streamId,
                 },
                 include: {
                     quizContent: {
                         include: {
                             questions: {
                                 select: {
-                                    id: true
-                                }
-                            }
-                        }
+                                    id: true,
+                                },
+                            },
+                        },
                     },
                     stream: {
-                        select: { id: true }
-                    }
-                }
+                        select: { id: true },
+                    },
+                },
             }), { maxRetries: 2, timeout: 5000 }),
             executeQuery(() => db.participant.findFirst({
                 where: {
                     walletAddress: wallet,
-                    tenantId: tenant.id
+                    tenantId: tenant.id,
+                    streamId: streamId,
+                    leftAt: null, // Only active participants
                 },
                 select: {
                     id: true,
-                    streamId: true
-                }
-            }), { maxRetries: 1, timeout: 3000 })
+                    streamId: true,
+                },
+            }), { maxRetries: 1, timeout: 3000 }),
         ]);
         if (!agenda) {
             return res.status(404).json({
                 error: "Quiz not found",
-                details: `Agenda ${agendaId} is not found or does not belong to your tenant`
+                details: `Agenda ${agendaId} is not found or does not belong to your tenant`,
             });
         }
         if (!agenda.quizContent) {
             return res.status(404).json({
                 error: "Quiz content not found",
-                details: `Quiz content for agenda ${agendaId} is missing`
+                details: `Quiz content for agenda ${agendaId} is missing`,
             });
         }
-        if (!participant || participant.streamId !== agenda.stream.id) {
+        // if (!participant || participant.streamId !== agenda.stream.id) {
+        //   return res.status(404).json({
+        //     error: "Participant not found in this stream",
+        //   });
+        // }
+        if (!participant) {
             return res.status(404).json({
-                error: "Participant not found in this stream"
+                error: "Participant not found",
+                details: `No participant found with wallet ${wallet} for tenant ${tenant.id}`,
             });
         }
         // Check if participant has already submitted answers
@@ -82,25 +93,25 @@ export const submitQuizAnswers = async (req, res) => {
             where: {
                 question: {
                     quizContent: {
-                        agendaId
-                    }
+                        agendaId,
+                    },
                 },
-                participantId: participant.id
+                participantId: participant.id,
             },
-            select: { id: true }
+            select: { id: true },
         }), { maxRetries: 1, timeout: 3000 });
         if (existingResponses) {
             return res.status(400).json({
-                error: "You have already submitted answers to this quiz"
+                error: "You have already submitted answers to this quiz",
             });
         }
         // Validate all questionIds exist in this quiz
-        const quizQuestionIds = new Set(agenda.quizContent.questions.map(q => q.id));
-        const invalidQuestionIds = answers.filter(a => !quizQuestionIds.has(a.questionId));
+        const quizQuestionIds = new Set(agenda.quizContent.questions.map((q) => q.id));
+        const invalidQuestionIds = answers.filter((a) => !quizQuestionIds.has(a.questionId));
         if (invalidQuestionIds.length > 0) {
             return res.status(400).json({
                 error: "Invalid question IDs in submission",
-                invalidIds: invalidQuestionIds.map(a => a.questionId)
+                invalidIds: invalidQuestionIds.map((a) => a.questionId),
             });
         }
         // Create responses individually (not in transaction)
@@ -115,23 +126,23 @@ export const submitQuizAnswers = async (req, res) => {
                         participantId: participant.id,
                         answer: answer.answer,
                         isCorrect: answer.isCorrect,
-                        pointsEarned: answer.pointsEarned || 0
-                    }
+                        pointsEarned: answer.pointsEarned || 0,
+                    },
                 }), { maxRetries: 1, timeout: 3000 });
                 createdResponses.push(response);
             }
             catch (error) {
                 // If it's a unique constraint violation, the user already answered
-                if (error.code === 'P2002') {
+                if (error.code === "P2002") {
                     failedResponses.push({
                         questionId: answer.questionId,
-                        error: "Already answered"
+                        error: "Already answered",
                     });
                 }
                 else {
                     failedResponses.push({
                         questionId: answer.questionId,
-                        error: error.message
+                        error: error.message,
                     });
                 }
             }
@@ -142,9 +153,9 @@ export const submitQuizAnswers = async (req, res) => {
                 data: {
                     agendaId: agenda.id,
                     participantId: participant.id,
-                    responseType: "quiz_submission"
-                }
-            }), { maxRetries: 1, timeout: 3000 }).catch(err => {
+                    responseType: "quiz_submission",
+                },
+            }), { maxRetries: 1, timeout: 3000 }).catch((err) => {
                 console.error("Failed to create participant response record:", err);
                 // Non-critical - continue
             });
@@ -153,9 +164,9 @@ export const submitQuizAnswers = async (req, res) => {
                 where: { id: participant.id },
                 data: {
                     totalPoints: { increment: totalScore },
-                    version: { increment: 1 }
-                }
-            }), { maxRetries: 2, timeout: 3000 }).catch(err => {
+                    version: { increment: 1 },
+                },
+            }), { maxRetries: 2, timeout: 3000 }).catch((err) => {
                 console.error("Failed to update participant points:", err);
                 // Non-critical - points can be recalculated
             });
@@ -166,7 +177,7 @@ export const submitQuizAnswers = async (req, res) => {
         if (createdResponses.length === 0) {
             return res.status(400).json({
                 error: "Failed to submit any answers",
-                failures: failedResponses
+                failures: failedResponses,
             });
         }
         if (failedResponses.length > 0) {
@@ -177,7 +188,7 @@ export const submitQuizAnswers = async (req, res) => {
                 submitted: createdResponses.length,
                 failed: failedResponses.length,
                 totalScore: totalScore * (createdResponses.length / answers.length),
-                failures: failedResponses
+                failures: failedResponses,
             });
         }
         // Complete success
@@ -185,15 +196,15 @@ export const submitQuizAnswers = async (req, res) => {
         res.status(201).json({
             message: "Quiz answers submitted successfully",
             totalScore,
-            answersSubmitted: createdResponses.length
+            answersSubmitted: createdResponses.length,
         });
     }
     catch (error) {
         console.error("Error submitting quiz answers:", error);
-        if (error.code === 'P2028' || error.code === 'TIMEOUT') {
+        if (error.code === "P2028" || error.code === "TIMEOUT") {
             return res.status(408).json({
                 error: "Request timeout - please try again",
-                details: "The operation took too long to complete"
+                details: "The operation took too long to complete",
             });
         }
         return res.status(500).json({
@@ -232,7 +243,7 @@ export const getQuizQuestions = async (req, res) => {
             where: {
                 id: agendaId,
                 tenantId: tenant.id,
-                action: "Quiz"
+                action: "Quiz",
             },
             include: {
                 quizContent: {
@@ -245,16 +256,16 @@ export const getQuizQuestions = async (req, res) => {
                                 isMultiChoice: true,
                                 points: true,
                                 correctAnswer: true,
-                            }
-                        }
-                    }
-                }
-            }
+                            },
+                        },
+                    },
+                },
+            },
         }), { maxRetries: 2, timeout: 10000 });
         if (!agenda || !agenda.quizContent) {
             return res.status(404).json({
                 error: "Quiz not found",
-                details: `Agenda ${agendaId} is not a quiz or does not exist`
+                details: `Agenda ${agendaId} is not a quiz or does not exist`,
             });
         }
         // 5. Format the response
@@ -263,7 +274,7 @@ export const getQuizQuestions = async (req, res) => {
             title: agenda.title,
             description: agenda.description,
             duration: agenda.duration,
-            questions: agenda.quizContent.questions
+            questions: agenda.quizContent.questions,
         };
         // Cache the result
         quizCache.set(cacheKey, { data: result, timestamp: Date.now() });
@@ -308,7 +319,7 @@ export const getQuizResults = async (req, res) => {
             where: {
                 id: agendaId,
                 tenantId: tenant.id,
-                action: "Quiz"
+                action: "Quiz",
             },
             include: {
                 quizContent: {
@@ -316,20 +327,20 @@ export const getQuizResults = async (req, res) => {
                         questions: {
                             select: {
                                 id: true,
-                                questionText: true
-                            }
-                        }
-                    }
+                                questionText: true,
+                            },
+                        },
+                    },
                 },
                 stream: {
-                    select: { id: true }
-                }
-            }
+                    select: { id: true },
+                },
+            },
         }), { maxRetries: 2, timeout: 10000 });
         if (!agenda || !agenda.quizContent) {
             return res.status(404).json({
                 error: "Quiz not found",
-                details: `Agenda ${agendaId} is not a quiz or does not exist`
+                details: `Agenda ${agendaId} is not a quiz or does not exist`,
             });
         }
         // 5. Get participants and statistics in parallel
@@ -341,60 +352,62 @@ export const getQuizResults = async (req, res) => {
                         some: {
                             question: {
                                 quizContent: {
-                                    agendaId
-                                }
-                            }
-                        }
-                    }
+                                    agendaId,
+                                },
+                            },
+                        },
+                    },
                 },
                 include: {
                     quizResponses: {
                         where: {
                             question: {
                                 quizContent: {
-                                    agendaId
-                                }
-                            }
+                                    agendaId,
+                                },
+                            },
                         },
                         select: {
                             isCorrect: true,
-                            pointsEarned: true
-                        }
-                    }
+                            pointsEarned: true,
+                        },
+                    },
                 },
                 orderBy: {
-                    totalPoints: 'desc'
-                }
+                    totalPoints: "desc",
+                },
             }), { maxRetries: 2, timeout: 10000 }),
             executeQuery(() => db.participant.count({
                 where: {
                     streamId: agenda.stream.id,
-                    leftAt: null
-                }
+                    leftAt: null,
+                },
             }), { maxRetries: 1, timeout: 5000 }),
             Promise.all(agenda.quizContent.questions.map(async (question) => {
                 const responses = await executeQuery(() => db.quizResponse.findMany({
                     where: {
-                        questionId: question.id
+                        questionId: question.id,
                     },
                     select: {
-                        isCorrect: true
-                    }
+                        isCorrect: true,
+                    },
                 }), { maxRetries: 1, timeout: 5000 });
                 const totalResponses = responses.length;
-                const correctResponses = responses.filter(r => r.isCorrect).length;
+                const correctResponses = responses.filter((r) => r.isCorrect).length;
                 return {
                     id: question.id,
                     questionText: question.questionText,
                     totalResponses,
                     correctResponses,
-                    correctPercentage: totalResponses > 0 ? Math.round((correctResponses / totalResponses) * 100) : 0
+                    correctPercentage: totalResponses > 0
+                        ? Math.round((correctResponses / totalResponses) * 100)
+                        : 0,
                 };
-            }))
+            })),
         ]);
         // 7. Format the leaderboard
-        const leaderboard = participants.map(participant => {
-            const correctAnswers = participant.quizResponses.filter(r => r.isCorrect).length;
+        const leaderboard = participants.map((participant) => {
+            const correctAnswers = participant.quizResponses.filter((r) => r.isCorrect).length;
             const totalAnswers = participant.quizResponses.length;
             const pointsFromQuiz = participant.quizResponses.reduce((sum, r) => sum + r.pointsEarned, 0);
             return {
@@ -405,7 +418,9 @@ export const getQuizResults = async (req, res) => {
                 totalPoints: participant.totalPoints,
                 correctAnswers,
                 totalAnswers,
-                accuracy: totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : 0
+                accuracy: totalAnswers > 0
+                    ? Math.round((correctAnswers / totalAnswers) * 100)
+                    : 0,
             };
         });
         const result = {
@@ -414,7 +429,7 @@ export const getQuizResults = async (req, res) => {
             totalParticipants: allParticipantsCount,
             participantsAnswered: participants.length,
             questionStats,
-            leaderboard
+            leaderboard,
         };
         // Cache the result
         quizCache.set(cacheKey, { data: result, timestamp: Date.now() });
@@ -460,7 +475,7 @@ export const getUserQuizAnswers = async (req, res) => {
                 where: {
                     id: agendaId,
                     tenantId: tenant.id,
-                    action: "Quiz"
+                    action: "Quiz",
                 },
                 include: {
                     quizContent: {
@@ -469,38 +484,38 @@ export const getUserQuizAnswers = async (req, res) => {
                                 select: {
                                     id: true,
                                     questionText: true,
-                                    correctAnswer: true
-                                }
-                            }
-                        }
+                                    correctAnswer: true,
+                                },
+                            },
+                        },
                     },
                     stream: {
-                        select: { id: true }
-                    }
-                }
+                        select: { id: true },
+                    },
+                },
             }), { maxRetries: 2, timeout: 10000 }),
             executeQuery(() => db.participant.findFirst({
                 where: {
                     walletAddress: wallet,
-                    tenantId: tenant.id
+                    tenantId: tenant.id,
                 },
                 select: {
                     id: true,
                     userName: true,
                     walletAddress: true,
-                    streamId: true
-                }
-            }), { maxRetries: 1, timeout: 5000 })
+                    streamId: true,
+                },
+            }), { maxRetries: 1, timeout: 5000 }),
         ]);
         if (!agenda || !agenda.quizContent) {
             return res.status(404).json({
                 error: "Quiz not found",
-                details: `Agenda ${agendaId} is not a quiz or does not exist`
+                details: `Agenda ${agendaId} is not a quiz or does not exist`,
             });
         }
         if (!participant || participant.streamId !== agenda.stream.id) {
             return res.status(404).json({
-                error: "Participant not found in this stream"
+                error: "Participant not found in this stream",
             });
         }
         // 5. Get participant's answers
@@ -509,20 +524,20 @@ export const getUserQuizAnswers = async (req, res) => {
                 participantId: participant.id,
                 question: {
                     quizContent: {
-                        agendaId
-                    }
-                }
+                        agendaId,
+                    },
+                },
             },
             select: {
                 questionId: true,
                 answer: true,
                 isCorrect: true,
-                pointsEarned: true
-            }
+                pointsEarned: true,
+            },
         }), { maxRetries: 2, timeout: 10000 });
         // 6. Format the response
-        const responseMap = new Map(responses.map(r => [r.questionId, r]));
-        const questionResponses = agenda.quizContent.questions.map(question => {
+        const responseMap = new Map(responses.map((r) => [r.questionId, r]));
+        const questionResponses = agenda.quizContent.questions.map((question) => {
             const response = responseMap.get(question.id);
             return {
                 questionId: question.id,
@@ -531,12 +546,12 @@ export const getUserQuizAnswers = async (req, res) => {
                 answer: response?.answer || null,
                 isCorrect: response?.isCorrect || false,
                 pointsEarned: response?.pointsEarned || 0,
-                correctAnswer: question.correctAnswer
+                correctAnswer: question.correctAnswer,
             };
         });
         // 7. Calculate totals
         const totalPoints = responses.reduce((sum, r) => sum + r.pointsEarned, 0);
-        const correctAnswers = responses.filter(r => r.isCorrect).length;
+        const correctAnswers = responses.filter((r) => r.isCorrect).length;
         success = true;
         return res.status(200).json({
             participantId: participant.id,
@@ -546,7 +561,7 @@ export const getUserQuizAnswers = async (req, res) => {
             answeredQuestions: responses.length,
             correctAnswers,
             totalQuestions: agenda.quizContent.questions.length,
-            responses: questionResponses
+            responses: questionResponses,
         });
     }
     catch (error) {

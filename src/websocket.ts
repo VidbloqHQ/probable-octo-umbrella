@@ -38,7 +38,13 @@ interface WebSocketMessage<T = unknown> {
 
 // Contest Types
 type ContestMode = "elimination" | "tournament" | "showcase" | "custom";
-type ContestStatus = "idle" | "starting" | "active" | "voting" | "ended";
+type ContestStatus =
+  | "idle"
+  | "starting"
+  | "active"
+  | "voting"
+  | "ended"
+  | "paused";
 type MediaRequirement = "required" | "optional" | "disabled";
 
 interface ContestConfig {
@@ -69,6 +75,8 @@ interface ContestState {
   currentRound: number;
   startedAt: number;
   contestants: Map<string, ContestantData>;
+  judges: Set<string>; // Add this
+  pausedRemainingTime?: number;
   eliminated: Set<string>;
   votes: Map<string, Vote[]>;
   votingDeadline: number | null;
@@ -91,7 +99,20 @@ interface Vote {
   score: number;
   timestamp: number;
   round: number;
+  // category?: string; // For multi-category voting (e.g., "presentation", "content", "delivery")
+  // weight?: number;   // For weighted votes (e.g., judge votes count more)
 }
+
+// export interface Vote {
+//   voterId: ParticipantId;
+//   voterWallet: string;
+//   targetId: ParticipantId;
+//   score: number;
+//   timestamp: number;
+//   round: number;
+//   category?: string; // For multi-category voting (e.g., "presentation", "content", "delivery")
+//   weight?: number;   // For weighted votes (e.g., judge votes count more)
+// }
 
 interface RoundResult {
   round: number;
@@ -185,22 +206,28 @@ const generateConnectionId = () => {
   return `conn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 };
 
-// Contest Helper Functions
+
 function calculateLeaderboard(contest: ContestState): LeaderboardEntry[] {
   const entries: LeaderboardEntry[] = [];
   let rank = 1;
 
   Array.from(contest.contestants.values())
     .filter((c) => !c.isEliminated)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => {
+      // Sort by score first, then by vote count as tiebreaker
+      if (b.score === a.score) {
+        return b.votes - a.votes;
+      }
+      return b.score - a.score;
+    })
     .forEach((contestant) => {
       entries.push({
         participantId: contestant.participantId,
         name: contestant.name,
         score: contestant.score,
-        votes: contestant.votes,
+        votes: contestant.votes, // This should now have the correct count
         rank,
-        change: 0, // You could calculate this from previous round
+        change: 0,
         isEliminated: false,
       });
       rank++;
@@ -220,6 +247,11 @@ function startRound(
   contest.currentRound = round;
   contest.status = "active";
   contest.votes.clear(); // Clear votes from previous round
+
+  // Reset vote counts for all contestants
+  contest.contestants.forEach((contestant) => {
+    contestant.votes = 0;
+  });
 
   const duration = contest.config.rules?.maxDuration || 300;
 
@@ -288,7 +320,6 @@ function endVotingPhase(roomName: string, broadcastToRoom: Function) {
     string,
     { total: number; average: number; count: number }
   >();
-
   contest.votes.forEach((votes, targetId) => {
     const total = votes.reduce((sum, vote) => sum + vote.score, 0);
     const average = votes.length > 0 ? total / votes.length : 0;
@@ -308,7 +339,38 @@ function endVotingPhase(roomName: string, broadcastToRoom: Function) {
     processEliminations(roomName, broadcastToRoom);
   }
 
+  // End the current round
   endRound(roomName, broadcastToRoom);
+
+  // Advance to next round or end contest
+  setTimeout(() => {
+    if (contest.currentRound < (contest.config.rules?.roundsCount || 3)) {
+      // Start next round
+      startRound(roomName, contest.currentRound + 1, broadcastToRoom);
+    } else {
+      // Contest is complete
+      contest.status = "ended";
+
+      const finalLeaderboard = calculateLeaderboard(contest);
+      const winner = finalLeaderboard[0]?.participantId || null;
+
+      const results = {
+        contestId: `${roomName}-${contest.startedAt}`,
+        winner,
+        finalLeaderboard,
+        rounds: contest.roundResults,
+        totalVotes: Array.from(contest.votes.values()).flat().length,
+        duration: Date.now() - contest.startedAt,
+      };
+
+      broadcastToRoom(roomName, "contestEnd", { results });
+
+      // Clean up contest state
+      setTimeout(() => {
+        delete contestStates[roomName];
+      }, 5000);
+    }
+  }, 2000);
 }
 
 function processEliminations(roomName: string, broadcastToRoom: Function) {
@@ -1180,6 +1242,33 @@ const createWebSocketServer = (server: HttpServer) => {
             break;
           }
 
+          case "startVoting": {
+            const { roomName, duration } = data as {
+              roomName: string;
+              duration: number;
+            };
+
+            const contest = contestStates[roomName];
+            if (!contest) {
+              console.error(`No contest found for room ${roomName}`);
+              break;
+            }
+
+            console.log(
+              `Starting voting phase for room ${roomName} with ${contest.contestants.size} contestants`
+            );
+
+            // ALWAYS send all contestants data with voting start
+            const contestantsArray = Array.from(contest.contestants.values());
+
+            broadcastToRoom(roomName, "votingStart", {
+              duration,
+              contestants: contestantsArray, // Make sure this is always sent
+            });
+
+            startVotingPhase(roomName, broadcastToRoom);
+            break;
+          }
           case "actionExecuted": {
             const { roomName, actionId } = data as {
               roomName: string;
@@ -1287,11 +1376,11 @@ const createWebSocketServer = (server: HttpServer) => {
               }
             });
 
-            console.log(`Reaction broadcast summary for room ${roomName}:`);
-            console.log(`- Total clients: ${clients.size}`);
-            console.log(`- Successful sends: ${sentCount}`);
-            console.log(`- Failed sends: ${failedCount}`);
-            console.log(`- Client details: ${clientDetails.join(", ")}`);
+            // console.log(`Reaction broadcast summary for room ${roomName}:`);
+            // console.log(`- Total clients: ${clients.size}`);
+            // console.log(`- Successful sends: ${sentCount}`);
+            // console.log(`- Failed sends: ${failedCount}`);
+            // console.log(`- Client details: ${clientDetails.join(", ")}`);
 
             // If no clients received the reaction, log a detailed warning
             if (sentCount === 0) {
@@ -1313,27 +1402,33 @@ const createWebSocketServer = (server: HttpServer) => {
             break;
           }
 
-          // Contest Mode Events
           case "startContest": {
-            const { roomName, config } = data as {
+            const {
+              roomName,
+              config,
+              contestants: contestantsList,
+            } = data as {
               roomName: string;
               config: ContestConfig;
+              contestants: any[]; // Array of contestants from client
             };
 
-            console.log(`Starting contest in room ${roomName}`, config);
+            console.log(
+              `Starting contest in room ${roomName} with ${
+                contestantsList?.length || 0
+              } contestants`
+            );
 
-            // Initialize contest state
+            // Initialize contest state with provided contestants
             const contestants = new Map<string, ContestantData>();
 
-            // Get all participants in the room
-            if (roomStates[roomName]) {
-              roomStates[roomName].participants.forEach((participantId) => {
-                // Get participant info from your participant tracking
-                contestants.set(participantId, {
-                  participantId,
-                  name: participantId, // You should get this from participant metadata
+            if (contestantsList && contestantsList.length > 0) {
+              contestantsList.forEach((contestant) => {
+                contestants.set(contestant.participantId, {
+                  participantId: contestant.participantId,
+                  name: contestant.name,
                   score: 0,
-                  votes: 0,
+                  votes: 0, // Initialize with 0 votes
                   isEliminated: false,
                 });
               });
@@ -1346,6 +1441,7 @@ const createWebSocketServer = (server: HttpServer) => {
               currentRound: 1,
               startedAt: Date.now(),
               contestants,
+              judges: new Set(), // Add this
               eliminated: new Set(),
               votes: new Map(),
               votingDeadline: null,
@@ -1353,10 +1449,12 @@ const createWebSocketServer = (server: HttpServer) => {
               timerEndTime: null,
             };
 
-            // Broadcast contest start to all participants
-            broadcastToRoom(roomName, "contestStart", { config });
+            // Broadcast contest start with contestant list to all participants
+            broadcastToRoom(roomName, "contestStart", {
+              config,
+              contestants: Array.from(contestants.values()), // Include contestant list
+            });
 
-            // Start first round after a delay
             setTimeout(() => {
               if (contestStates[roomName]) {
                 contestStates[roomName].status = "active";
@@ -1366,7 +1464,6 @@ const createWebSocketServer = (server: HttpServer) => {
 
             break;
           }
-
           case "endContest": {
             const { roomName } = data as { roomName: string };
 
@@ -1423,15 +1520,6 @@ const createWebSocketServer = (server: HttpServer) => {
               break;
             }
 
-            // Validate vote
-            const voter = contest.contestants.get(voterId);
-            const target = contest.contestants.get(targetId);
-
-            if (!voter || !target) {
-              console.error(`Invalid voter or target`);
-              break;
-            }
-
             // Store vote
             const vote: Vote = {
               voterId,
@@ -1444,27 +1532,35 @@ const createWebSocketServer = (server: HttpServer) => {
             const targetVotes = contest.votes.get(targetId) || [];
             contest.votes.set(targetId, [...targetVotes, vote]);
 
-            // Update contestant stats ON THE SERVER
-            target.votes++;
-            target.score += score;
+            // Update contestant stats
+            const target = contest.contestants.get(targetId);
+            if (target) {
+              // INCREMENT the votes count (this was missing!)
+              target.votes = (contest.votes.get(targetId) || []).length;
+
+              // Calculate new average score
+              const allVotes = contest.votes.get(targetId) || [];
+              const totalScore = allVotes.reduce((sum, v) => sum + v.score, 0);
+              target.score =
+                allVotes.length > 0 ? totalScore / allVotes.length : 0;
+            }
 
             // Broadcast the vote
             broadcastToRoom(roomName, "voteSubmitted", vote);
 
-            // IMPORTANT: Also broadcast the updated contestant data
+            // Broadcast updated contestant data with correct vote count
             broadcastToRoom(roomName, "contestantUpdate", {
               participantId: targetId,
-              score: target.score,
-              votes: target.votes,
+              score: target?.score || 0,
+              votes: target?.votes || 0, // This will now be the correct count
             });
 
-            // Broadcast updated leaderboard
+            // Recalculate and broadcast updated leaderboard
             const leaderboard = calculateLeaderboard(contest);
             broadcastToRoom(roomName, "leaderboardUpdate", leaderboard);
 
             break;
           }
-
           case "eliminateContestant": {
             const { roomName, participantId } = data as {
               roomName: string;
@@ -1495,30 +1591,58 @@ const createWebSocketServer = (server: HttpServer) => {
 
           case "nextRound": {
             const { roomName } = data as { roomName: string };
-
             const contest = contestStates[roomName];
             if (!contest || contest.status !== "active") break;
 
-            // End current round
-            endRound(roomName, broadcastToRoom);
+            // Clear any existing timer
+            if (contestTimers[roomName]) {
+              clearTimeout(contestTimers[roomName]);
+              delete contestTimers[roomName];
+            }
 
-            // Start next round after a delay
-            setTimeout(() => {
-              if (
-                contest.currentRound < (contest.config.rules?.roundsCount || 3)
-              ) {
-                startRound(roomName, contest.currentRound + 1, broadcastToRoom);
-              } else {
-                // Contest is over
-                extWs.send(
-                  JSON.stringify({ event: "endContest", data: { roomName } })
-                );
-              }
-            }, 2000);
+            // Check if voting is enabled and we should go to voting phase
+            if (
+              contest.config.features?.voting &&
+              contest.status === "active"
+            ) {
+              // Start voting phase instead of immediately going to next round
+              startVotingPhase(roomName, broadcastToRoom);
+            } else {
+              // No voting, proceed to next round
+              endRound(roomName, broadcastToRoom);
 
+              setTimeout(() => {
+                if (
+                  contest.currentRound <
+                  (contest.config.rules?.roundsCount || 3)
+                ) {
+                  startRound(
+                    roomName,
+                    contest.currentRound + 1,
+                    broadcastToRoom
+                  );
+                } else {
+                  // Contest is over, trigger final voting or end
+                  if (contest.config.features?.voting) {
+                    startVotingPhase(roomName, broadcastToRoom);
+                  } else {
+                    // Send endContest through broadcast, not direct to client
+                    broadcastToRoom(roomName, "contestEnd", {
+                      results: {
+                        contestId: `${roomName}-${contest.startedAt}`,
+                        winner: null,
+                        finalLeaderboard: calculateLeaderboard(contest),
+                        rounds: contest.roundResults,
+                        totalVotes: 0,
+                        duration: Date.now() - contest.startedAt,
+                      },
+                    });
+                  }
+                }
+              }, 2000);
+            }
             break;
           }
-
           case "getContestState": {
             const { roomName } = data as { roomName: string };
 
@@ -1533,7 +1657,11 @@ const createWebSocketServer = (server: HttpServer) => {
               break;
             }
 
-            // Send current contest state with accurate scores
+            // Filter out any invalid contestants
+            const validContestants = Array.from(
+              contest.contestants.values()
+            ).filter((c) => c && c.participantId && c.name);
+
             extWs.send(
               JSON.stringify({
                 event: "contestStateUpdate",
@@ -1547,7 +1675,8 @@ const createWebSocketServer = (server: HttpServer) => {
                           Math.floor((contest.timerEndTime - Date.now()) / 1000)
                         )
                       : 0,
-                    contestants: Array.from(contest.contestants.values()), // This includes server scores
+                    contestants: validContestants,
+                    judges: Array.from(contest.judges),
                     eliminated: Array.from(contest.eliminated),
                     leaderboard: calculateLeaderboard(contest),
                     votingTimeRemaining: contest.votingDeadline
@@ -1562,7 +1691,86 @@ const createWebSocketServer = (server: HttpServer) => {
                 },
               })
             );
+            break;
+          }
 
+          case "setJudges": {
+            const { roomName, judges } = data as {
+              roomName: string;
+              judges: string[];
+            };
+            const contest = contestStates[roomName];
+            if (!contest) {
+              console.error(`No contest found for room ${roomName}`);
+              break;
+            }
+
+            // Update judges set
+            contest.judges = new Set(judges);
+
+            console.log(`Updated judges for room ${roomName}:`, judges);
+
+            // Broadcast to all participants
+            broadcastToRoom(roomName, "judgesUpdate", { judges });
+            break;
+          }
+
+          case "pauseContest": {
+            const { roomName } = data as { roomName: string };
+            const contest = contestStates[roomName];
+            if (!contest) break;
+
+            // Store remaining time when pausing
+            if (contest.timerEndTime) {
+              const remainingTime = Math.max(
+                0,
+                contest.timerEndTime - Date.now()
+              );
+              contest.pausedRemainingTime = remainingTime;
+            }
+
+            contest.status = "paused";
+
+            // Clear any active timers
+            if (contestTimers[roomName]) {
+              clearTimeout(contestTimers[roomName]);
+              delete contestTimers[roomName];
+            }
+
+            // Broadcast pause to ALL participants
+            broadcastToRoom(roomName, "contestPaused", {
+              remainingTime: contest.pausedRemainingTime || 0,
+            });
+            break;
+          }
+
+          case "resumeContest": {
+            const { roomName } = data as { roomName: string };
+            const contest = contestStates[roomName];
+            if (!contest || contest.status !== "paused") break;
+
+            contest.status = "active";
+
+            // Restore timer with remaining time
+            if (contest.pausedRemainingTime) {
+              contest.timerEndTime = Date.now() + contest.pausedRemainingTime;
+
+              // Restart the timer
+              contestTimers[roomName] = setTimeout(() => {
+                if (contest.config.features?.voting) {
+                  startVotingPhase(roomName, broadcastToRoom);
+                } else {
+                  endRound(roomName, broadcastToRoom);
+                }
+              }, contest.pausedRemainingTime);
+
+              delete contest.pausedRemainingTime;
+            }
+
+            // Broadcast resume to ALL participants
+            broadcastToRoom(roomName, "contestResumed", {
+              timerEndTime: contest.timerEndTime,
+            });
             break;
           }
 
@@ -1612,6 +1820,46 @@ const createWebSocketServer = (server: HttpServer) => {
             });
             break;
           }
+          // TURN BASED PLUGIN/ STREAMLINK SERVER CODE
+          case "turnStart":
+          case "turnEnd":
+          case "turnSkipped":
+          case "turnTimeout":
+          case "allTurnsComplete":
+          case "turnBasedReady": {
+            // Relay turn-based events to all participants
+            const { roomName, ...eventData } = data as any;
+            console.log(
+              `Broadcasting ${event} to room ${roomName}:`,
+              eventData
+            );
+            broadcastToRoom(roomName, event, eventData);
+            break;
+          }
+          case "updateContestConfig": {
+            const { config, contestType, contestReady } = data as {
+              config: any; // Your ContestConfig type
+              contestType: "simultaneous" | "turn-based";
+              contestReady: boolean;
+            };
+
+            const { roomName } = data as { roomName: string };
+
+            console.log(
+              `Host updating contest config for room ${roomName} to ${contestType} mode`
+            );
+
+            // Broadcast config update to all participants except sender
+            broadcastToRoom(roomName, "contestConfigUpdate", {
+              config,
+              contestType,
+              contestReady,
+            });
+
+            break;
+          }
+
+          // TURN BASED PLUGIN/ STREAMLINK SERVER CODE
 
           case "participantActive": {
             const { participantId, roomName, timestamp } = data as {

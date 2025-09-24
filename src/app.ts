@@ -12,6 +12,7 @@ import {
   TenantMeRouter,
   ProgramRouter,
   MonitorRouter,
+  QArouter
 } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 import {
@@ -501,6 +502,7 @@ app.use("/poll", PollRouter.default);
 app.use("/participant", ParticipantRouter.default);
 app.use("/quiz", QuizRouter.default);
 app.use("/program", ProgramRouter.default);
+app.use("/qa", QArouter.default);
 
 // ============================================
 // 404 HANDLER
