@@ -1,7 +1,7 @@
-import { AccessToken, } from "livekit-server-sdk";
+import { AccessToken, EgressClient, StreamOutput, StreamProtocol, EncodingOptionsPreset } from "livekit-server-sdk";
 import { StreamSessionType, CallType } from "@prisma/client";
 import { db, executeQuery, trackQuery } from "../prisma.js";
-import { isValidWalletAddress, roomService, } from "../utils/index.js";
+import { isValidWalletAddress, roomService, livekitHost, } from "../utils/index.js";
 // Cache for stream lookups
 const streamCache = new Map();
 const STREAM_CACHE_TTL = 30000; // 30 seconds
@@ -417,6 +417,240 @@ export const getStream = async (req, res) => {
             });
         }
         return res.status(500).json({ error: "Internal server error" });
+    }
+    finally {
+        trackQuery(success);
+    }
+};
+/**
+ * Controller for streaming to YouTube - ENHANCED VERSION
+ */
+export const streamToYoutube = async (req, res) => {
+    const { roomName, wallet, youtubeRtmpUrl, layout = 'speaker', // 'grid', 'speaker', or 'single-speaker'
+    quality = {}, } = req.body;
+    const tenant = req.tenant;
+    let success = false;
+    try {
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        if (!roomName || !wallet || typeof wallet !== "string" || !youtubeRtmpUrl) {
+            return res.status(400).json({
+                error: "Missing required fields: room name, wallet, or YouTube RTMP URL",
+            });
+        }
+        if (!isValidWalletAddress(wallet)) {
+            return res.status(400).json({ error: "Invalid wallet address format." });
+        }
+        if (!youtubeRtmpUrl.startsWith("rtmp://")) {
+            return res.status(400).json({
+                error: "Invalid YouTube RTMP URL format. Should start with rtmp://",
+            });
+        }
+        const [stream, user] = await Promise.all([
+            executeQuery(() => db.stream.findFirst({
+                where: {
+                    name: roomName,
+                    tenantId: tenant.id,
+                },
+                include: {
+                    user: true,
+                },
+            }), { maxRetries: 2, timeout: 10000 }),
+            executeQuery(() => db.user.findFirst({
+                where: {
+                    walletAddress: wallet,
+                    tenantId: tenant.id,
+                },
+            }), { maxRetries: 2, timeout: 10000 })
+        ]);
+        if (!stream) {
+            return res.status(404).json({ error: "Stream not found." });
+        }
+        // if (stream.recording) {
+        //   return res.status(400).json({
+        //     error: "Stream is already being recorded or streamed",
+        //     recordId: stream.recordId,
+        //   });
+        // }
+        if (!user) {
+            return res.status(403).json({ error: "User not found" });
+        }
+        let userType;
+        if (user.id === stream.userId) {
+            userType = "host";
+        }
+        else if (stream.streamSessionType === StreamSessionType.Meeting) {
+            userType = "co-host";
+        }
+        else {
+            userType = "guest";
+        }
+        if (userType !== "host") {
+            return res.status(403).json({
+                error: "Only the host can stream to YouTube.",
+            });
+        }
+        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || "", process.env.LIVEKIT_API_SECRET || "");
+        // Quality settings with defaults
+        const videoSettings = {
+            width: quality.width || 1920,
+            height: quality.height || 1080,
+            framerate: quality.framerate || 30,
+            videoBitrate: quality.videoBitrate || 4500,
+        };
+        const audioBitrate = quality.audioBitrate || 128;
+        // Determine layout preset
+        const layoutPreset = layout === 'speaker'
+            ? 'speaker-dark'
+            : layout === 'single-speaker'
+                ? 'single-speaker'
+                : 'grid-dark';
+        // Configure output
+        const output = new StreamOutput({
+            protocol: StreamProtocol.RTMP,
+            urls: [youtubeRtmpUrl],
+        });
+        // Select encoding preset based on quality settings
+        // Note: Presets include proper audio bitrate (128kbps) by default
+        let encodingPreset;
+        if (videoSettings.width >= 1920 && videoSettings.height >= 1080) {
+            // 1080p presets (best quality, includes 128kbps audio)
+            encodingPreset = videoSettings.framerate >= 60
+                ? EncodingOptionsPreset.H264_1080P_60
+                : EncodingOptionsPreset.H264_1080P_30;
+        }
+        else if (videoSettings.width >= 1280 && videoSettings.height >= 720) {
+            // 720p presets
+            encodingPreset = videoSettings.framerate >= 60
+                ? EncodingOptionsPreset.H264_720P_60
+                : EncodingOptionsPreset.H264_720P_30;
+        }
+        else {
+            // Default to 1080p30 for best quality
+            encodingPreset = EncodingOptionsPreset.H264_1080P_30;
+        }
+        // Start egress
+        const egressInfo = await egressService.startRoomCompositeEgress(roomName, output, {
+            layout: layoutPreset,
+            encodingOptions: encodingPreset,
+            audioOnly: false,
+            videoOnly: false,
+        });
+        if (!egressInfo) {
+            return res.status(500).json({
+                error: "Failed to start YouTube stream. Please try again"
+            });
+        }
+        await executeQuery(() => db.stream.update({
+            where: { id: stream.id },
+            data: {
+                recording: true,
+                recordId: egressInfo.egressId,
+            },
+        }), { maxRetries: 2, timeout: 10000 });
+        // Invalidate cache
+        streamCache.delete(`${tenant.id}:${roomName}`);
+        success = true;
+        return res.status(201).json({
+            message: "YouTube streaming started",
+            recordingId: egressInfo.egressId,
+            streamId: stream.id,
+            config: {
+                layout,
+                quality: videoSettings,
+            },
+        });
+    }
+    catch (error) {
+        console.error("Error starting YouTube stream:", error);
+        return res.status(500).json({
+            error: "Internal server error",
+            details: error instanceof Error ? error.message : String(error),
+        });
+    }
+    finally {
+        trackQuery(success);
+    }
+};
+// Stop controller remains the same
+export const stopYoutubeStream = async (req, res) => {
+    const { recordId, wallet } = req.body;
+    const tenant = req.tenant;
+    let success = false;
+    try {
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        if (!recordId || !wallet || typeof wallet !== "string") {
+            return res.status(400).json({
+                error: "Missing required fields: recordId and wallet",
+            });
+        }
+        if (!isValidWalletAddress(wallet)) {
+            return res.status(400).json({ error: "Invalid wallet address format." });
+        }
+        const [stream, user] = await Promise.all([
+            executeQuery(() => db.stream.findFirst({
+                where: {
+                    recordId,
+                    tenantId: tenant.id,
+                    recording: true,
+                },
+                include: {
+                    user: true,
+                },
+            }), { maxRetries: 2, timeout: 10000 }),
+            executeQuery(() => db.user.findFirst({
+                where: {
+                    walletAddress: wallet,
+                    tenantId: tenant.id,
+                },
+            }), { maxRetries: 2, timeout: 10000 })
+        ]);
+        if (!stream) {
+            return res.status(404).json({ error: "Active streaming session not found" });
+        }
+        if (!user) {
+            return res.status(403).json({ error: "User not found" });
+        }
+        let userType;
+        if (user.id === stream.userId) {
+            userType = "host";
+        }
+        else if (stream.streamSessionType === StreamSessionType.Meeting) {
+            userType = "co-host";
+        }
+        else {
+            userType = "guest";
+        }
+        if (userType !== "host") {
+            return res.status(403).json({
+                error: "Only the host can stop YouTube streaming.",
+            });
+        }
+        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || "", process.env.LIVEKIT_API_SECRET || "");
+        await egressService.stopEgress(recordId);
+        await executeQuery(() => db.stream.update({
+            where: { id: stream.id },
+            data: {
+                recording: false,
+            },
+        }), { maxRetries: 2, timeout: 10000 });
+        streamCache.delete(`${tenant.id}:${stream.name}`);
+        success = true;
+        return res.status(200).json({
+            message: "YouTube streaming stopped successfully",
+            streamId: stream.id,
+            recordId: recordId,
+        });
+    }
+    catch (error) {
+        console.error("Error stopping YouTube stream:", error);
+        return res.status(500).json({
+            error: "Internal server error",
+            details: error instanceof Error ? error.message : String(error),
+        });
     }
     finally {
         trackQuery(success);

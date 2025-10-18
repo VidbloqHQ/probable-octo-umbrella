@@ -86,3 +86,8 @@ export const checkSolBalance = async (
     return { hasBalance: false, balance: 0 };
   }
 };
+
+export const getTokenDecimals = async (mint: PublicKey, tokenAccount: PublicKey) => {
+  const tokenBalance = await connection.getTokenAccountBalance(tokenAccount);
+  return tokenBalance.value.decimals;
+};

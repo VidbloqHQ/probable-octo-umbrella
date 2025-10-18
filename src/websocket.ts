@@ -44,7 +44,8 @@ type ContestStatus =
   | "active"
   | "voting"
   | "ended"
-  | "paused";
+  | "paused"
+  | "turn-voting";
 type MediaRequirement = "required" | "optional" | "disabled";
 
 interface ContestConfig {
@@ -99,7 +100,8 @@ interface Vote {
   score: number;
   timestamp: number;
   round: number;
-  // category?: string; // For multi-category voting (e.g., "presentation", "content", "delivery")
+  isRealtime?: boolean; // Indicates if the vote was cast in real-time
+  category?: string; // For multi-category voting (e.g., "presentation", "content", "delivery")
   // weight?: number;   // For weighted votes (e.g., judge votes count more)
 }
 
@@ -205,7 +207,6 @@ export let wss: WebSocket.Server;
 const generateConnectionId = () => {
   return `conn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 };
-
 
 function calculateLeaderboard(contest: ContestState): LeaderboardEntry[] {
   const entries: LeaderboardEntry[] = [];
@@ -962,12 +963,12 @@ const createWebSocketServer = (server: HttpServer) => {
               walletAddress: string;
             };
 
-            console.log("Received request to speak:", {
-              participantId,
-              roomName,
-              walletAddress,
-              timestamp: new Date().toISOString(),
-            });
+            // console.log("Received request to speak:", {
+            //   participantId,
+            //   roomName,
+            //   walletAddress,
+            //   timestamp: new Date().toISOString(),
+            // });
 
             const newRequest = { participantId, name, walletAddress };
 
@@ -1326,14 +1327,14 @@ const createWebSocketServer = (server: HttpServer) => {
               roomName, // Include roomName in the reaction data
             };
 
-            console.log(
-              `Broadcasting reaction from ${
-                typeof sender === "string" ? sender : "unknown"
-              } in room ${roomName}`
-            );
-            console.log(
-              `Room ${roomName} has ${clientsByRoom[roomName].size} connected clients`
-            );
+            // console.log(
+            //   `Broadcasting reaction from ${
+            //     typeof sender === "string" ? sender : "unknown"
+            //   } in room ${roomName}`
+            // );
+            // console.log(
+            //   `Room ${roomName} has ${clientsByRoom[roomName].size} connected clients`
+            // );
 
             // Get all clients in the room
             const clients = clientsByRoom[roomName];
@@ -1356,11 +1357,11 @@ const createWebSocketServer = (server: HttpServer) => {
                     })
                   );
                   sentCount++;
-                  console.log(
-                    `✓ Sent reaction to client: ${
-                      client.participantId || "unknown"
-                    }`
-                  );
+                  // console.log(
+                  //   `✓ Sent reaction to client: ${
+                  //     client.participantId || "unknown"
+                  //   }`
+                  // );
                 } catch (error) {
                   console.error(
                     `✗ Error sending reaction to client ${client.participantId}:`,
@@ -1511,11 +1512,14 @@ const createWebSocketServer = (server: HttpServer) => {
           }
 
           case "submitVote": {
-            const { roomName, voterId, targetId, score, round } =
+            const { roomName, voterId, targetId, score, round, category } =
               data as Vote & { roomName: string };
 
             const contest = contestStates[roomName];
-            if (!contest || contest.status !== "voting") {
+            if (
+              !contest ||
+              (contest.status !== "voting" && contest.status !== "turn-voting")
+            ) {
               console.error(`Cannot vote - contest not in voting phase`);
               break;
             }
@@ -1527,6 +1531,7 @@ const createWebSocketServer = (server: HttpServer) => {
               score,
               timestamp: Date.now(),
               round,
+              category,
             };
 
             const targetVotes = contest.votes.get(targetId) || [];
@@ -1535,11 +1540,10 @@ const createWebSocketServer = (server: HttpServer) => {
             // Update contestant stats
             const target = contest.contestants.get(targetId);
             if (target) {
-              // INCREMENT the votes count (this was missing!)
-              target.votes = (contest.votes.get(targetId) || []).length;
-
-              // Calculate new average score
               const allVotes = contest.votes.get(targetId) || [];
+              const uniqueVoters = new Set(allVotes.map((v) => v.voterId));
+              target.votes = uniqueVoters.size;
+
               const totalScore = allVotes.reduce((sum, v) => sum + v.score, 0);
               target.score =
                 allVotes.length > 0 ? totalScore / allVotes.length : 0;
@@ -1548,12 +1552,20 @@ const createWebSocketServer = (server: HttpServer) => {
             // Broadcast the vote
             broadcastToRoom(roomName, "voteSubmitted", vote);
 
-            // Broadcast updated contestant data with correct vote count
+            // Broadcast updated contestant data
             broadcastToRoom(roomName, "contestantUpdate", {
               participantId: targetId,
               score: target?.score || 0,
-              votes: target?.votes || 0, // This will now be the correct count
+              votes: target?.votes || 0,
             });
+
+            // CRITICAL FIX: Broadcast the actual votes map to sync client state
+            const votesArray: Array<{ targetId: string; votes: Vote[] }> = [];
+            contest.votes.forEach((votes, targetId) => {
+              votesArray.push({ targetId, votes });
+            });
+
+            broadcastToRoom(roomName, "votesUpdate", { votes: votesArray });
 
             // Recalculate and broadcast updated leaderboard
             const leaderboard = calculateLeaderboard(contest);
@@ -1821,8 +1833,47 @@ const createWebSocketServer = (server: HttpServer) => {
             break;
           }
           // TURN BASED PLUGIN/ STREAMLINK SERVER CODE
-          case "turnStart":
-          case "turnEnd":
+          // case "turnStart":
+          case "turnStart": {
+            const { roomName, participantId, duration, queue } = data as {
+              roomName: string;
+              participantId: string;
+              duration: number;
+              queue: string[];
+            };
+
+            const contest = contestStates[roomName];
+            if (!contest) {
+              console.error(`No contest found for room ${roomName}`);
+              break;
+            }
+
+            // console.log("=== TURN START DEBUG ===");
+            // console.log("Duration received:", duration);
+            // console.log("Old timer end time:", contest.timerEndTime);
+
+            // CRITICAL FIX: Always recalculate timerEndTime for this specific turn
+            // Ignore any previous timerEndTime value
+            const turnDuration = duration; // Should be 120
+            const endTime = Date.now() + turnDuration * 1000;
+
+            // console.log("New timer end time:", endTime);
+            // console.log("Should end in (ms):", endTime - Date.now());
+            // console.log("========================");
+
+            // IMPORTANT: Overwrite any existing timerEndTime
+            contest.timerEndTime = endTime;
+            contest.status = "active";
+
+            broadcastToRoom(roomName, "turnStart", {
+              participantId,
+              duration: turnDuration,
+              queue,
+              currentPerformer: participantId,
+            });
+
+            break;
+          }
           case "turnSkipped":
           case "turnTimeout":
           case "allTurnsComplete":
@@ -1834,6 +1885,87 @@ const createWebSocketServer = (server: HttpServer) => {
               eventData
             );
             broadcastToRoom(roomName, event, eventData);
+            break;
+          }
+
+          // Add this to your WebSocket server message handler
+          // Replace the existing "turnEnd" case with this:
+
+          case "turnEnd": {
+            const { roomName, participantId, triggerVoting } = data as {
+              roomName: string;
+              participantId: string;
+              triggerVoting?: boolean;
+            };
+
+            // Broadcast turn end
+            broadcastToRoom(roomName, "turnEnd", { participantId });
+
+            // If triggerVoting is true, automatically start turn-based voting
+            if (triggerVoting && contestStates[roomName]) {
+              // Small delay before starting voting
+              setTimeout(() => {
+                const contest = contestStates[roomName];
+                if (!contest) return;
+
+                // Start turn voting phase
+                const votingDuration = 30; // You can make this configurable
+                contest.status = "turn-voting";
+                contest.votingDeadline = Date.now() + votingDuration * 1000;
+
+                console.log(
+                  `Auto-starting turn voting for ${participantId} (${votingDuration}s)`
+                );
+
+                // Get performer info
+                const performer = contest.contestants.get(participantId);
+
+                // Broadcast turn voting start
+                broadcastToRoom(roomName, "turnVotingStart", {
+                  performerId: participantId,
+                  performerName: performer?.name || "Unknown",
+                  duration: votingDuration,
+                  contestants: performer ? [performer] : [],
+                });
+
+                // Set timer to end turn voting
+                votingTimers[roomName] = setTimeout(() => {
+                  // Calculate results for this performer
+                  const votes = contest.votes.get(participantId) || [];
+                  const totalScore = votes.reduce(
+                    (sum, vote) => sum + vote.score,
+                    0
+                  );
+                  const averageScore =
+                    votes.length > 0 ? totalScore / votes.length : 0;
+
+                  // Update contestant score
+                  const contestant = contest.contestants.get(participantId);
+                  if (contestant) {
+                    contestant.score = averageScore;
+                    contestant.votes = votes.length;
+                  }
+
+                  // Broadcast turn voting end
+                  broadcastToRoom(roomName, "turnVotingEnd", {
+                    performerId: participantId,
+                    score: averageScore,
+                    voteCount: votes.length,
+                  });
+
+                  // Reset status
+                  contest.status = "active";
+                  contest.votingDeadline = null;
+
+                  // Clear the timer
+                  if (votingTimers[roomName]) {
+                    clearTimeout(votingTimers[roomName]);
+                    delete votingTimers[roomName];
+                  }
+                }, votingDuration * 1000);
+              }, 1000); // 1 second delay
+            }
+
             break;
           }
           case "updateContestConfig": {
@@ -1859,6 +1991,254 @@ const createWebSocketServer = (server: HttpServer) => {
             break;
           }
 
+          case "startTurnVoting": {
+            const { roomName, performerId, duration } = data as {
+              roomName: string;
+              performerId: string;
+              duration: number;
+            };
+
+            const contest = contestStates[roomName];
+            if (!contest) {
+              console.error(`No contest found for room ${roomName}`);
+              break;
+            }
+
+            // Start turn voting phase
+            const votingDuration = duration || 30;
+            contest.status = "turn-voting";
+            contest.votingDeadline = Date.now() + votingDuration * 1000;
+
+            // console.log(
+            //   `Starting turn voting for ${performerId} (${votingDuration}s)`
+            // );
+
+            // Get performer info
+            const performer = contest.contestants.get(performerId);
+
+            broadcastToRoom(roomName, "turnVotingStart", {
+              performerId: performerId,
+              performerName: performer?.name || "Unknown",
+              duration: votingDuration,
+              // Don't send contestants - clients already have them from contest start
+            });
+
+            // Set timer to end turn voting
+            votingTimers[roomName] = setTimeout(() => {
+              // Calculate results for this performer
+              const votes = contest.votes.get(performerId) || [];
+              const totalScore = votes.reduce(
+                (sum, vote) => sum + vote.score,
+                0
+              );
+              const averageScore =
+                votes.length > 0 ? totalScore / votes.length : 0;
+
+              // Update contestant score
+              const contestant = contest.contestants.get(performerId);
+              if (contestant) {
+                contestant.score = averageScore;
+                const uniqueVoters = new Set(votes.map((v) => v.voterId));
+                contestant.votes = uniqueVoters.size;
+              }
+
+              // Broadcast votes update so clients have the latest votes
+              const votesArray: Array<{ targetId: string; votes: Vote[] }> = [];
+              contest.votes.forEach((votes, targetId) => {
+                votesArray.push({ targetId, votes });
+              });
+              broadcastToRoom(roomName, "votesUpdate", { votes: votesArray });
+
+              // Broadcast updated leaderboard
+              const leaderboard = calculateLeaderboard(contest);
+              broadcastToRoom(roomName, "leaderboardUpdate", leaderboard);
+
+              // Broadcast turn voting end
+              broadcastToRoom(roomName, "turnVotingEnd", {
+                performerId: performerId,
+                score: averageScore,
+                voteCount: votes.length,
+              });
+
+              // Reset status
+              contest.status = "active";
+              contest.votingDeadline = null;
+
+              // Clear the timer
+              if (votingTimers[roomName]) {
+                clearTimeout(votingTimers[roomName]);
+                delete votingTimers[roomName];
+              }
+            }, votingDuration * 1000);
+
+            break;
+          }
+
+          case "submitRealtimeVote": {
+            const { roomName, voterId, targetId, score, round, category } =
+              data as {
+                roomName: string;
+                voterId: string;
+                targetId: string;
+                score: number;
+                round: number;
+                category?: string;
+              };
+
+            const contest = contestStates[roomName];
+            if (!contest) {
+              console.error(`No contest found for room ${roomName}`);
+              break;
+            }
+
+            // Store the real-time vote
+            const vote: Vote = {
+              voterId,
+              targetId,
+              score,
+              timestamp: Date.now(),
+              round,
+              category,
+              isRealtime: true,
+            };
+
+            const targetVotes = contest.votes.get(targetId) || [];
+            contest.votes.set(targetId, [...targetVotes, vote]);
+
+            // Update contestant stats immediately
+            const target = contest.contestants.get(targetId);
+            if (target) {
+              const allVotes = contest.votes.get(targetId) || [];
+
+              const uniqueVoters = new Set(allVotes.map((v) => v.voterId));
+              target.votes = uniqueVoters.size;
+
+              const totalScore = allVotes.reduce((sum, v) => sum + v.score, 0);
+              target.score =
+                allVotes.length > 0 ? totalScore / allVotes.length : 0;
+            }
+
+            // Broadcast the real-time vote
+            broadcastToRoom(roomName, "realtimeVoteSubmitted", {
+              vote,
+              updatedScore: target?.score || 0,
+              voteCount: target?.votes || 0,
+            });
+
+            const votesArray: Array<{ targetId: string; votes: Vote[] }> = [];
+            contest.votes.forEach((votes, targetId) => {
+              votesArray.push({ targetId, votes });
+            });
+
+            broadcastToRoom(roomName, "votesUpdate", { votes: votesArray });
+
+            // Recalculate and broadcast leaderboard
+            const leaderboard = calculateLeaderboard(contest);
+            broadcastToRoom(roomName, "leaderboardUpdate", leaderboard);
+
+            break;
+          }
+
+          case "pauseTurn": {
+            const { roomName } = data as { roomName: string };
+
+            const contest = contestStates[roomName];
+            if (!contest || contest.status !== "active") {
+              console.error(`Cannot pause turn - contest not active`);
+              break;
+            }
+
+            // Calculate remaining time
+            const currentTime = Date.now();
+            const elapsed = contest.timerEndTime
+              ? Math.max(0, contest.timerEndTime - currentTime)
+              : 0;
+            const remainingMs = contest.timerEndTime
+              ? Math.max(0, contest.timerEndTime - currentTime)
+              : 0;
+            const remainingSeconds = Math.floor(remainingMs / 1000);
+
+            // console.log("Calculated remaining (ms):", remainingMs);
+            console.log("Calculated remaining (seconds):", remainingSeconds);
+            // console.log("==========================");
+
+            // Store the remaining time
+            contest.pausedRemainingTime = elapsed;
+            contest.status = "paused";
+
+            console.log(`Turn paused with ${elapsed}ms remaining`);
+
+            // Broadcast pause event
+            broadcastToRoom(roomName, "turnPaused", {
+              remainingTime: elapsed,
+            });
+
+            break;
+          }
+
+          case "resumeTurn": {
+            const { roomName } = data as { roomName: string };
+
+            const contest = contestStates[roomName];
+            if (!contest || contest.status !== "paused") {
+              console.error(`Cannot resume turn - contest not paused`);
+              break;
+            }
+
+            // Calculate new end time based on remaining time
+            const newEndTime = Date.now() + (contest.pausedRemainingTime || 0);
+            contest.timerEndTime = newEndTime;
+            contest.status = "active";
+            delete contest.pausedRemainingTime;
+
+            console.log(
+              `Turn resumed with ${
+                contest.timerEndTime - Date.now()
+              }ms remaining`
+            );
+
+            // Broadcast resume event
+            broadcastToRoom(roomName, "turnResumed", {
+              timerEndTime: contest.timerEndTime,
+            });
+
+            break;
+          }
+
+          case "restartTurn": {
+            const { roomName, performerId, duration } = data as {
+              roomName: string;
+              performerId: string;
+              duration?: number;
+            };
+
+            const contest = contestStates[roomName];
+            if (!contest) {
+              console.error(`Cannot restart turn - contest not found`);
+              break;
+            }
+
+            // Use provided duration or default turn duration
+            const turnDuration = duration || 120; // Default 2 minutes
+            const newEndTime = Date.now() + turnDuration * 1000;
+
+            contest.timerEndTime = newEndTime;
+            contest.status = "active";
+            delete contest.pausedRemainingTime;
+
+            console.log(
+              `Turn restarted for ${performerId} with ${turnDuration}s`
+            );
+
+            // Broadcast restart event
+            broadcastToRoom(roomName, "turnRestarted", {
+              performerId,
+              duration: turnDuration,
+              timerEndTime: newEndTime,
+            });
+
+            break;
+          }
           // TURN BASED PLUGIN/ STREAMLINK SERVER CODE
 
           case "participantActive": {

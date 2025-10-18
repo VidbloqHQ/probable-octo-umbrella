@@ -5,7 +5,7 @@ import {
   getAuthorizedDomains,
   addAuthorizedDomain,
   bulkAddAuthorizedDomains,
-  removeAuthorizedDomain
+  removeAuthorizedDomain,
 } from "../controllers/tenant-me.controller.js";
 // import { safeController } from "../middlewares/request-lock.middleware.js";
 import { singletonController } from "../utils/singleton-controller.js";

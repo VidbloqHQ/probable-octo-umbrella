@@ -67,3 +67,7 @@ export const checkSolBalance = async (connection, walletAddress) => {
         return { hasBalance: false, balance: 0 };
     }
 };
+export const getTokenDecimals = async (mint, tokenAccount) => {
+    const tokenBalance = await connection.getTokenAccountBalance(tokenAccount);
+    return tokenBalance.value.decimals;
+};

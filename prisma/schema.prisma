@@ -1,21 +1,428 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  // directUrl = env("DIRECT_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id                  String               @id @default(cuid())
+  creatorWallet       String               @unique
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  theme               String?
+  primaryColor        String?
+  secondaryColor      String?
+  accentColor         String?
+  textPrimaryColor    String?
+  textSecondaryColor  String?
+  logo                String?
+  shortLogo           String?
+  name                String?
+  templateId          String?
+  rpcEndpoint         String?
+  networkCluster      String?
+  defaultStreamType   StreamSessionType    @default(Meeting)
+  defaultFundingType  StreamFundingType    @default(Live)
+  agendas             Agenda[]
+  apiTokens           ApiToken[]
+  authorizedDomains   AuthorizedDomain[]
+  enabledStreamTypes  EnabledStreamTypes?
+  participants        Participant[]
+  programStreams      ProgramStream[]
+  streams             Stream[]
+  streamDistributions StreamDistribution[]
+  streamDonations     StreamDonation[]
+  transactions        Transaction[]
+  users               User[]
+}
+
+model ApiToken {
+  id         String    @id @default(cuid())
+  key        String    @unique
+  secret     String
+  name       String
+  tenantId   String
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  isActive   Boolean   @default(true)
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([key])
+  @@index([key, tenantId])
+  @@index([tenantId])
+}
+
+model AuthorizedDomain {
+  id        String   @id @default(cuid())
+  domain    String
+  tenantId  String
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([domain, tenantId])
+}
+
+model User {
+  id                  String               @id @default(cuid())
+  name                String?
+  email               String?
+  emailVerified       DateTime?
+  image               String?
+  walletAddress       String
+  points              Int?
+  tenantId            String
+  accounts            Account[]
+  solanaStreams       ProgramStream[]
+  streams             Stream[]
+  streamDistributions StreamDistribution[]
+  streamDonations     StreamDonation[]
+  transaction         Transaction[]
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([walletAddress, tenantId])
+  @@index([tenantId, email])
+  @@index([walletAddress, tenantId])
+  @@index([walletAddress, tenantId], map: "idx_user_wallet_tenant")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId], map: "idx_account_userid")
+}
+
+model Stream {
+  id                  String            @id @default(cuid())
+  name                String
+  userId              String
+  title               String?
+  callType            CallType
+  streamSessionType   StreamSessionType
+  scheduledFor        DateTime?
+  creatorWallet       String
+  hasHost             Boolean           @default(false)
+  recording           Boolean           @default(false)
+  recordId            String?
+  recordLink          String?
+  tenantId            String
+  isLive              Boolean           @default(false)
+  createdAt           DateTime?
+  startedAt           DateTime?
+  endedAt             DateTime?
+  isPublic            Boolean           @default(true)
+  fundingType         StreamFundingType @default(Live)
+  version             Int               @default(1)
+  recordingType       String?
+  recordingUrl        String?
+  recordingOutputType String?
+  lastRecordingUrl    String?
+  youtubeEgressId     String?
+  agenda              Agenda[]
+  participants        Participant[]
+  tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions        Transaction[]
+
+  @@unique([name, tenantId])
+  @@index([tenantId, userId])
+  @@index([name, tenantId])
+  @@index([name, tenantId], map: "idx_stream_name_tenant")
+  @@index([name, tenantId, id], map: "idx_stream_name_tenant_id")
+}
+
+model EnabledStreamTypes {
+  id            String  @id @default(cuid())
+  tenantId      String  @unique
+  enableStream  Boolean @default(true)
+  enableMeeting Boolean @default(true)
+  enablePodcast Boolean @default(false)
+  tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model Transaction {
+  id               Int                 @id @default(autoincrement())
+  userId           String
+  signature        String
+  createdAt        DateTime            @default(now())
+  tenantId         String
+  transactionType  String?
+  solanaStreamId   String?
+  donationId       String?
+  distributionId   String?
+  amount           String?
+  tokenName        String?
+  narration        String?
+  streamId         String?
+  senderAddress    String?
+  recipientAddress String?
+  recipients       Json?
+  status           String?             @default("pending")
+  distribution     StreamDistribution? @relation(fields: [distributionId], references: [id])
+  donation         StreamDonation?     @relation(fields: [donationId], references: [id])
+  programStream    ProgramStream?      @relation(fields: [solanaStreamId], references: [id])
+  stream           Stream?             @relation(fields: [streamId], references: [id])
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId])
+  @@index([transactionType])
+  @@index([streamId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([distributionId], map: "idx_transaction_distributionid")
+  @@index([donationId], map: "idx_transaction_donationid")
+  @@index([solanaStreamId], map: "idx_transaction_solanastreamid")
+}
+
+model Agenda {
+  id                   String                @id @default(cuid())
+  streamId             String
+  timeStamp            Int
+  action               AgendaAction
+  title                String?
+  description          String?
+  tenantId             String
+  duration             Int?
+  isCompleted          Boolean               @default(false)
+  stream               Stream                @relation(fields: [streamId], references: [id])
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customContent        CustomContent?
+  participantResponses ParticipantResponse[]
+  pollContent          PollContent?
+  qaContent            QAContent?
+  quizContent          QuizContent?
+
+  @@index([tenantId, streamId])
+  @@index([id, tenantId], map: "idx_agenda_id_tenant")
+  @@index([streamId, tenantId], map: "idx_agenda_stream_tenant")
+  @@index([streamId, timeStamp], map: "idx_agenda_stream_timestamp")
+}
+
+model PollContent {
+  id         String     @id @default(cuid())
+  agendaId   String     @unique
+  options    String[]
+  totalVotes Int        @default(0)
+  agenda     Agenda     @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+  votes      PollVote[]
+}
+
+model QuizContent {
+  id        String         @id @default(cuid())
+  agendaId  String         @unique
+  agenda    Agenda         @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+  questions QuizQuestion[]
+}
+
+model QuizQuestion {
+  id            String         @id @default(cuid())
+  quizContentId String
+  questionText  String
+  options       String[]
+  correctAnswer String
+  isMultiChoice Boolean        @default(true)
+  points        Int            @default(1)
+  quizContent   QuizContent    @relation(fields: [quizContentId], references: [id], onDelete: Cascade)
+  responses     QuizResponse[]
+
+  @@index([quizContentId])
+  @@index([quizContentId], map: "idx_quiz_question_content")
+}
+
+model QAContent {
+  id       String  @id @default(cuid())
+  agendaId String  @unique
+  topic    String?
+  agenda   Agenda  @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+}
+
+model CustomContent {
+  id         String @id @default(cuid())
+  agendaId   String @unique
+  customData Json?
+  agenda     Agenda @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+}
+
+model PollVote {
+  id             String      @id @default(cuid())
+  pollContentId  String
+  selectedOption String
+  participantId  String
+  participant    Participant @relation(fields: [participantId], references: [id])
+  pollContent    PollContent @relation(fields: [pollContentId], references: [id], onDelete: Cascade)
+
+  @@unique([pollContentId, participantId])
+  @@index([pollContentId, selectedOption])
+}
+
+model QuizResponse {
+  id            String       @id @default(cuid())
+  questionId    String
+  participantId String
+  answer        String
+  isCorrect     Boolean
+  pointsEarned  Int
+  participant   Participant  @relation(fields: [participantId], references: [id])
+  question      QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, participantId])
+  @@index([questionId, isCorrect])
+}
+
+model ParticipantResponse {
+  id            String      @id @default(cuid())
+  agendaId      String
+  participantId String
+  responseType  String
+  timestamp     DateTime    @default(now())
+  agenda        Agenda      @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+  participant   Participant @relation(fields: [participantId], references: [id])
+
+  @@index([agendaId, participantId])
+}
+
+model Participant {
+  id            String                @id @default(cuid())
+  streamId      String
+  userName      String
+  walletAddress String
+  userType      String
+  avatarUrl     String?
+  joinedAt      DateTime              @default(now())
+  leftAt        DateTime?
+  tenantId      String
+  totalPoints   Int                   @default(0)
+  version       Int                   @default(1)
+  stream        Stream                @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  tenant        Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  responses     ParticipantResponse[]
+  pollVotes     PollVote[]
+  quizResponses QuizResponse[]
+
+  @@unique([walletAddress, streamId, tenantId])
+  @@index([tenantId, streamId])
+  @@index([walletAddress, streamId, tenantId])
+  @@index([streamId, walletAddress], map: "idx_participant_stream_wallet")
+  @@index([streamId, tenantId], map: "idx_participants_stream_tenant")
+  @@index([walletAddress, streamId], map: "idx_participants_wallet_stream")
+}
+
+model ProgramStream {
+  id                           String               @id @default(cuid())
+  name                         String
+  streamType                   StreamFundingType
+  streamPDA                    String
+  streamATA                    String
+  mintAddress                  String
+  hostWallet                   String
+  status                       ProgramStreamStatus  @default(Initialized)
+  isInitialized                Boolean              @default(false)
+  totalDeposited               BigInt               @default(0)
+  totalDistributed             BigInt               @default(0)
+  endTime                      DateTime?
+  createdAt                    DateTime             @default(now())
+  startedAt                    DateTime?
+  endedAt                      DateTime?
+  updatedAt                    DateTime             @updatedAt
+  transactionSignature         String?
+  startTransactionSignature    String?
+  completeTransactionSignature String?
+  updateTransactionSignature   String?
+  tenantId                     String
+  userId                       String
+  tenant                       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  distributions                StreamDistribution[]
+  donations                    StreamDonation[]
+  transactions                 Transaction[]
+
+  @@unique([name, hostWallet, tenantId])
+  @@index([tenantId, userId])
+  @@index([status])
+}
+
+model StreamDonation {
+  id                         String        @id @default(cuid())
+  amount                     String
+  donorWallet                String
+  donorPDA                   String
+  status                     String        @default("pending")
+  transactionSignature       String?
+  createdAt                  DateTime      @default(now())
+  confirmedAt                DateTime?
+  refundPending              Boolean       @default(false)
+  refundAmount               String?
+  refundConfirmed            Boolean       @default(false)
+  refundedAt                 DateTime?
+  refundInitiator            String?
+  refundTransactionSignature String?
+  streamId                   String
+  tenantId                   String
+  userId                     String
+  stream                     ProgramStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  tenant                     Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions               Transaction[]
+
+  @@index([streamId])
+  @@index([tenantId, userId])
+  @@index([donorWallet])
+}
+
+model StreamDistribution {
+  id                   String        @id @default(cuid())
+  amount               String
+  recipientWallet      String
+  status               String        @default("pending")
+  transactionSignature String?
+  createdAt            DateTime      @default(now())
+  confirmedAt          DateTime?
+  streamId             String
+  tenantId             String
+  userId               String
+  stream               ProgramStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  tenant               Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                 User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions         Transaction[]
+
+  @@index([streamId])
+  @@index([tenantId, userId])
+  @@index([recipientWallet])
+}
+
+model IdempotencyKey {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  response  Json
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([key])
+  @@index([expiresAt])
 }
 
 enum AgendaAction {
   Poll
   Q_A
   Custom
-  Quiz 
+  Quiz
 }
 
 enum StreamSessionType {
@@ -40,446 +447,4 @@ enum ProgramStreamStatus {
   Active
   Completed
   Cancelled
-}
-
-model Tenant {
-  id                String        @id @default(cuid())
-  creatorWallet     String        @unique
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
-
-  // Customization fields
-  theme             String?       // Theme identifier or name
-  primaryColor      String?       // Hex color code
-  secondaryColor    String?       // Hex color code
-  accentColor       String?       // Hex color code
-  textPrimaryColor  String?
-  textSecondaryColor String?
-  logo              String? 
-  shortLogo         String? 
-  name              String?       // Tenant name
-  templateId        String?       // Reference to template if you store templates separately
-  rpcEndpoint       String?       // Custom RPC endpoint URL
-  networkCluster    String?       // e.g., "mainnet-beta", "devnet", "testnet"
-  defaultStreamType StreamSessionType  @default(Meeting)
-  defaultFundingType StreamFundingType @default(Live)
-  enabledStreamTypes EnabledStreamTypes?
-
-  // Tenant level authorized domains
-  authorizedDomains AuthorizedDomain[]
-  
-  // Tenant relationships
-  users             User[]
-  streams           Stream[]
-  transactions      Transaction[]
-  agendas           Agenda[]
-  participants      Participant[]
-  apiTokens         ApiToken[]    // For managing multiple API tokens per tenant
-  programStreams    ProgramStream[]
-  streamDonations   StreamDonation[]
-  streamDistributions StreamDistribution[]
-}
-
-// API token model for SDK authentication
-model ApiToken {
-  id          String    @id @default(cuid())
-  key         String    @unique  // Public API key for identification
-  secret      String    // Secret key (hashed) for authentication
-  name        String    // A descriptive name for the token
-  tenantId    String
-  createdAt   DateTime  @default(now())
-  expiresAt   DateTime?
-  lastUsedAt  DateTime?
-  isActive    Boolean   @default(true)
-  
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  
-  // CRITICAL: Add these indexes for authentication performance
-  @@index([key])
-  @@index([key, tenantId])
-  @@index([tenantId])
-}
-
-model AuthorizedDomain {
-  id          String    @id @default(cuid())
-  domain      String    // e.g., "thestreamlink.com"
-  tenantId    String
-  createdAt   DateTime  @default(now())
-  
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  
-  @@unique([domain, tenantId]) // Each domain can only be added once per tenant
-}
-
-model User {
-  id            String        @id @default(cuid())
-  name          String?
-  email         String?
-  emailVerified DateTime?
-  image         String?
-  walletAddress String
-  points        Int?
-  tenantId      String        // Which tenant the user belongs to
-  
-  accounts      Account[]
-  streams       Stream[]
-  transaction   Transaction[]
-  
-  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  solanaStreams      ProgramStream[]
-  streamDonations    StreamDonation[]
-  streamDistributions StreamDistribution[]
-  
-  @@unique([walletAddress, tenantId]) // Wallet addresses must be unique within a tenant
-  @@index([tenantId, email])
-  @@index([walletAddress, tenantId]) // Add composite index for faster lookups
-}
-
-model Account {
-  id                String  @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String? @db.Text
-  session_state     String?
-  
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  @@unique([provider, providerAccountId])
-}
-
-model Stream {
-  id           String        @id @default(cuid())
-  name         String
-  userId       String
-  title        String?
-  callType     CallType
-  streamSessionType   StreamSessionType
-  scheduledFor DateTime?
-  creatorWallet String
-  hasHost      Boolean       @default(false)
-  recording    Boolean       @default(false)
-  recordId     String?
-  recordLink   String?
-  tenantId     String
-  isLive       Boolean       @default(false)
-  createdAt   DateTime?
-  startedAt    DateTime?
-  endedAt      DateTime?
-  isPublic     Boolean       @default(true) // true = open to everyone, false = requires permission
-  fundingType  StreamFundingType  @default(Live)
-  
-  agenda       Agenda[]
-  participants Participant[]
-  version      Int       @default(1)
-  
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  
-  @@unique([name, tenantId]) // Names must be unique within a tenant
-  @@index([tenantId, userId])
-  @@index([name, tenantId]) // Add composite index for stream lookups
-}
-
-model EnabledStreamTypes {
-  id             String           @id @default(cuid())
-  tenantId       String           @unique
-  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  enableStream   Boolean          @default(true)
-  enableMeeting  Boolean          @default(true)
-  enablePodcast  Boolean          @default(false)
-}
-
-model Transaction {
-  id         Int      @id @default(autoincrement())
-  userId     String
-  signature  String
-  createdAt  DateTime @default(now())
-  tenantId   String
-
-  transactionType   String?              // 'initialize', 'deposit', 'distribute', etc.
-  solanaStreamId    String?              // Optional reference to SolanaProgramStream
-  donationId        String?              // Optional reference to StreamDonation
-  distributionId    String?              // Optional reference to StreamDistribution
-  
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  programStream     ProgramStream?      @relation(fields: [solanaStreamId], references: [id])
-  donation          StreamDonation?      @relation(fields: [donationId], references: [id])
-  distribution      StreamDistribution?  @relation(fields: [distributionId], references: [id])
-  
-  @@index([tenantId, userId])
-  @@index([transactionType])
-}
-
-
-model  Agenda {
-  id           String         @id @default(cuid())
-  streamId     String
-  timeStamp    Int
-  action       AgendaAction
-  title        String?        // Title for any agenda item type
-  description  String?        // Optional description for any agenda item  
-  tenantId     String
-  duration     Int?          // Duration in minutes, optional for some actions
-  isCompleted  Boolean       @default(false) // Whether the agenda item has been completed
-  
-  // Relationships
-  stream       Stream         @relation(fields: [streamId], references: [id])
-  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  
-  // Specific content relationships based on action type
-  pollContent             PollContent?            // For Poll actions
-  quizContent             QuizContent?            // For Quiz actions
-  // assetTransferContent    AssetTransferContent?  
-  qaContent               QAContent?              // For Q_A actions
-  customContent           CustomContent?          // For Custom actions
-  
-  // Participant scores/responses
-  participantResponses ParticipantResponse[]
-  
-  @@index([tenantId, streamId])
-}
-
-// Poll-specific content
-model PollContent {
-  id          String     @id @default(cuid())
-  agendaId    String     @unique
-  options     String[]   // Poll options instead of using wallets
-  totalVotes  Int        @default(0)
-  
-  // Relationship
-  agenda      Agenda     @relation(fields: [agendaId], references: [id], onDelete: Cascade)
-  votes       PollVote[]
-}
-
-// Quiz-specific content
-model QuizContent {
-  id          String       @id @default(cuid())
-  agendaId    String       @unique
-  questions   QuizQuestion[] // One-to-many relationship with questions
-  
-  // Relationship
-  agenda      Agenda       @relation(fields: [agendaId], references: [id], onDelete: Cascade)
-}
-
-// Quiz Questions keep try of user's response time
-model QuizQuestion {
-  id            String     @id @default(cuid())
-  quizContentId String
-  questionText  String
-  options       String[]   // Available options (for multiple choice)
-  correctAnswer String     // The correct answer or option
-  isMultiChoice Boolean    @default(true)
-  points        Int        @default(1) // Points awarded for correct answer
-  
-  // Relationship
-  quizContent   QuizContent @relation(fields: [quizContentId], references: [id], onDelete: Cascade)
-  responses     QuizResponse[]
-  
-  @@index([quizContentId])
-}
-
-// Q&A-specific content
-model QAContent {
-  id          String     @id @default(cuid())
-  agendaId    String     @unique
-  topic       String?    // Topic of the Q&A session
-  
-  // Relationship
-  agenda      Agenda     @relation(fields: [agendaId], references: [id], onDelete: Cascade)
-}
-
-// Custom-specific content
-model CustomContent {
-  id          String     @id @default(cuid())
-  agendaId    String     @unique
-  customData  Json?      // Flexible field for custom agenda items
-  
-  // Relationship
-  agenda      Agenda     @relation(fields: [agendaId], references: [id], onDelete: Cascade)
-}
-
-// Tracking poll votes
-model PollVote {
-  id              String      @id @default(cuid())
-  pollContentId   String      // Reference to the PollContent
-  pollContent     PollContent @relation(fields: [pollContentId], references: [id], onDelete: Cascade)
-  selectedOption  String      // The option that was voted for
-  participant     Participant @relation(fields: [participantId], references: [id])
-  participantId   String
-
-  @@unique([pollContentId, participantId]) // One vote per participant per poll
-  @@index([pollContentId, selectedOption]) // For faster counting
-}
-
-// Tracking quiz responses
-model QuizResponse {
-  id              String        @id @default(cuid())
-  questionId      String
-  question        QuizQuestion  @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  participantId   String
-  participant     Participant   @relation(fields: [participantId], references: [id])
-  answer          String        // The participant's answer
-  isCorrect       Boolean       // Whether the answer is correct
-  pointsEarned    Int           // Points earned for this response
-  
-  @@unique([questionId, participantId]) // One response per participant per question
-  @@index([questionId, isCorrect]) // For faster stats calculation
-}
-
-// Record of participant responses to any agenda item
-model ParticipantResponse {
-  id              String      @id @default(cuid())
-  agendaId        String
-  agenda          Agenda      @relation(fields: [agendaId], references: [id], onDelete: Cascade)
-  participantId   String
-  participant     Participant @relation(fields: [participantId], references: [id])
-  responseType    String      // e.g., "vote", "quiz_answer", "question", etc.
-  timestamp       DateTime    @default(now())
-  
-  @@index([agendaId, participantId])
-}
-
-// Updated Participant model with score tracking
-model Participant {
-  id            String     @id @default(cuid())
-  streamId      String
-  userName      String
-  walletAddress String
-  userType      String
-  avatarUrl     String?
-  joinedAt      DateTime   @default(now())
-  leftAt        DateTime?
-  tenantId      String
-  
-  // Score tracking
-  totalPoints   Int        @default(0)  // Accumulated points from quizzes etc.
-  
-  // Relationships
-  stream        Stream     @relation(fields: [streamId], references: [id], onDelete: Cascade)
-  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  pollVotes     PollVote[]
-  quizResponses QuizResponse[]
-  responses     ParticipantResponse[]
-  version      Int       @default(1)
-  
-  @@unique([walletAddress, streamId, tenantId])
-  @@index([tenantId, streamId])
-  @@index([walletAddress, streamId, tenantId]) // Add composite index for participant lookups
-}
-
-model ProgramStream {
-  id                        String              @id @default(cuid())
-  name                      String
-  streamType                StreamFundingType   // Reuse your existing enum
-  streamPDA                 String
-  streamATA                 String
-  mintAddress               String
-  hostWallet                String
-  status                    ProgramStreamStatus @default(Initialized)
-  isInitialized             Boolean             @default(false)
-  totalDeposited            BigInt              @default(0)
-  totalDistributed          BigInt              @default(0)
-  endTime                   DateTime?
-  createdAt                 DateTime            @default(now())
-  startedAt                 DateTime?
-  endedAt                   DateTime?
-  updatedAt                 DateTime            @updatedAt
-  
-  // Transaction signatures
-  transactionSignature      String?
-  startTransactionSignature String?
-  completeTransactionSignature String?
-  updateTransactionSignature String?
-
-  // Relations
-  tenant                    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tenantId                  String
-  user                      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId                    String
-  
-  // Stream related records
-  donations                 StreamDonation[]
-  distributions             StreamDistribution[]
-  transactions              Transaction[]
-
-  @@unique([name, hostWallet, tenantId])
-  @@index([tenantId, userId])
-  @@index([status])
-}
-
-// Record of donations to a stream
-model StreamDonation {
-  id                     String              @id @default(cuid())
-  amount                 String
-  donorWallet            String
-  donorPDA               String
-  status                 String              @default("pending") // pending, confirmed, failed
-  transactionSignature   String?
-  createdAt              DateTime            @default(now())
-  confirmedAt            DateTime?
-  
-  // Refund tracking
-  refundPending          Boolean             @default(false)
-  refundAmount           String?
-  refundConfirmed        Boolean             @default(false)
-  refundedAt             DateTime?
-  refundInitiator        String?
-  refundTransactionSignature String?
-
-  // Relations
-  stream                 ProgramStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
-  streamId               String
-  tenant                 Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tenantId               String
-  user                   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId                 String
-  transactions           Transaction[]
-
-  @@index([streamId])
-  @@index([tenantId, userId])
-  @@index([donorWallet])
-}
-
-// Record of distributions from a stream
-model StreamDistribution {
-  id                     String              @id @default(cuid())
-  amount                 String
-  recipientWallet        String
-  status                 String              @default("pending") // pending, confirmed, failed
-  transactionSignature   String?
-  createdAt              DateTime            @default(now())
-  confirmedAt            DateTime?
-
-  // Relations
-  stream                 ProgramStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
-  streamId               String
-  tenant                 Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  tenantId               String
-  user                   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId                 String
-  transactions           Transaction[]
-
-  @@index([streamId])
-  @@index([tenantId, userId])
-  @@index([recipientWallet])
-}
-
-model IdempotencyKey {
-  id          String    @id @default(cuid())
-  key         String    @unique
-  response    Json
-  createdAt   DateTime  @default(now())
-  expiresAt   DateTime
-  
-  @@index([key])
-  @@index([expiresAt])
 }

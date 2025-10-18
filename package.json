@@ -35,7 +35,6 @@
     "livekit-server-sdk": "^2.10.2",
     "multer": "^2.0.1",
     "rate-limiter-flexible": "^7.2.0",
-    "redis": "^5.8.1",
-    "socket.io": "^4.8.1"
+    "redis": "^5.8.1"
   }
 }

@@ -1,6 +1,6 @@
 import express from "express";
 import { createServer } from "http";
-import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter, QArouter } from "./routes/index.js";
+import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, TransactionRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter, QArouter, BalanceRouter, } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 import { requestLockMiddleware, timeoutMiddleware, } from "./middlewares/request-lock.middleware.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
@@ -121,68 +121,6 @@ app.use((req, res, next) => {
     // logTiming(req, "2-BODY_PARSER_END");
     next();
 });
-// ============================================
-// TEST ENDPOINTS (NO AUTH)
-// ============================================
-// app.get('/test-direct', async (req: Request, res: Response) => {
-//   const start = Date.now();
-//   console.log('[TEST-DIRECT] Starting direct DB test');
-//   try {
-//     const result = await db.$queryRaw`SELECT COUNT(*) as count FROM "Stream"`;
-//     const time = Date.now() - start;
-//     console.log(`[TEST-DIRECT] Query completed in ${time}ms`);
-//     res.json({ 
-//       time,
-//       result,
-//       message: 'Direct database query without middleware'
-//     });
-//   } catch (error: any) {
-//     const time = Date.now() - start;
-//     console.error(`[TEST-DIRECT] Query failed after ${time}ms:`, error.message);
-//     res.status(500).json({ 
-//       error: error.message,
-//       time,
-//       message: 'Direct database query failed'
-//     });
-//   }
-// });
-// app.post('/test-auth-timing', async (req: Request, res: Response) => {
-//   const start = Date.now();
-//   const apiKey = req.headers['x-api-key'] as string;
-//   const apiSecret = req.headers['x-api-secret'] as string;
-//   console.log('[TEST-AUTH] Testing authentication speed');
-//   try {
-//     const authStart = Date.now();
-//     const apiToken = await db.apiToken.findUnique({
-//       where: { key: apiKey },
-//       select: {
-//         id: true,
-//         secret: true,
-//         isActive: true,
-//         tenantId: true
-//       }
-//     });
-//     console.log(`[TEST-AUTH] DB query: ${Date.now() - authStart}ms`);
-//     if (!apiToken) {
-//       return res.status(401).json({ error: 'Invalid API key' });
-//     }
-//     const bcryptStart = Date.now();
-//     const bcrypt = await import('bcryptjs');
-//     const validSecret = await bcrypt.compare(apiSecret, apiToken.secret);
-//     console.log(`[TEST-AUTH] Bcrypt compare: ${Date.now() - bcryptStart}ms`);
-//     res.json({
-//       totalTime: Date.now() - start,
-//       dbQueryTime: Date.now() - authStart,
-//       bcryptTime: Date.now() - bcryptStart,
-//       valid: validSecret
-//     });
-//   } catch (error: any) {
-//     res.status(500).json({ 
-//       error: error.message,
-//       time: Date.now() - start
-//     });
-//   }
-// });
 // ============================================
 // REQUEST ID MIDDLEWARE
 // ============================================
@@ -372,6 +310,7 @@ app.use((req, res, next) => {
 app.use("/tenant/me", TenantMeRouter.default);
 app.use("/user", UserRouter.default);
 app.use("/stream", StreamRouter.default);
+app.use("/transaction", TransactionRouter.default);
 app.use("/pay", PaymentRouter.default);
 app.use("/agenda", AgendaRouter.default);
 app.use("/poll", PollRouter.default);
@@ -379,6 +318,7 @@ app.use("/participant", ParticipantRouter.default);
 app.use("/quiz", QuizRouter.default);
 app.use("/program", ProgramRouter.default);
 app.use("/qa", QArouter.default);
+app.use("/balance", BalanceRouter.default);
 // ============================================
 // 404 HANDLER
 // ============================================

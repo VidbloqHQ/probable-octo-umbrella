@@ -1,5 +1,5 @@
 import { Response } from "express";
-import { PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
+import { PublicKey, Transaction, SystemProgram, Connection } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   createTransferInstruction,
@@ -16,24 +16,58 @@ import {
 } from "../utils/index.js";
 import { db, executeQuery, trackQuery } from "../prisma.js";
 import { TenantRequest } from "../types/index.js";
+import { getSanctumGateway } from "../utils/sanctum.js";
 
 // Cache for token account checks
 const tokenAccountCache = new Map<
   string,
   { exists: boolean; timestamp: number }
 >();
+
 const TOKEN_ACCOUNT_CACHE_TTL = 30000; // 30 seconds
 
 /**
- * Controller for creating a transaction - OPTIMIZED
+ * Helper function to get account info with retry logic
+ */
+async function getAccountInfoWithRetry(
+  connection: Connection,
+  account: PublicKey,
+  maxRetries = 3
+) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const info = await connection.getAccountInfo(account);
+      if (info !== null) return info;
+      
+      if (i < maxRetries - 1) {
+        console.log(`Account info attempt ${i + 1} returned null, retrying...`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    } catch (err) {
+      console.error(`Attempt ${i + 1} failed:`, err);
+      if (i === maxRetries - 1) throw err;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+  return null;
+}
+
+/**
+ * Controller for creating a transaction - ENHANCED WITH SANCTUM OPTIMIZATION
  */
 export const createTransaction = async (req: TenantRequest, res: Response) => {
-  const { senderPublicKey, recipients, tokenName } = req.body;
+  const { 
+    senderPublicKey, 
+    recipients, 
+    tokenName,
+    narration,
+    streamId,
+    deliveryMethod = 'standard' // NEW: Accept delivery method preference
+  } = req.body;
   const tenant = req.tenant;
   let success = false;
 
-  console.log("createTransaction endpoint called");
-  console.log({ senderPublicKey, recipients: recipients?.length, tokenName });
+  const forceRefresh = req.query?.forceRefresh === 'true';
 
   try {
     // Tenant verification
@@ -54,7 +88,28 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // Verify sender belongs to tenant (with cache)
+    // If streamId provided, verify it exists and belongs to tenant
+    if (streamId) {
+      const stream = await executeQuery(
+        () =>
+          db.stream.findFirst({
+            where: {
+              id: streamId,
+              tenantId: tenant.id,
+            },
+            select: { id: true },
+          }),
+        { maxRetries: 1, timeout: 3000 }
+      );
+
+      if (!stream) {
+        return res.status(400).json({
+          error: "Invalid stream ID or stream not found for this tenant",
+        });
+      }
+    }
+
+    // Verify sender belongs to tenant
     const senderUser = await executeQuery(
       () =>
         db.user.findFirst({
@@ -92,6 +147,9 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
 
     const transaction = new Transaction();
     const isSOLTransfer = tokenName.toLowerCase() === "sol";
+    
+    // Calculate total amount being sent
+    let totalAmount = 0;
 
     // Process recipients
     for (const recipient of recipients) {
@@ -104,6 +162,8 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
         });
       }
 
+      totalAmount += amount;
+
       let recipientKey: PublicKey;
       try {
         recipientKey = new PublicKey(recipientPublicKey);
@@ -115,9 +175,9 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
 
       if (isSOLTransfer) {
         // For SOL transfers
-        if (solBalanceCheck.balance < amount) {
+        if (solBalanceCheck.balance < totalAmount) {
           return res.status(400).json({
-            error: `Insufficient SOL balance. Required: ${amount} SOL, Available: ${solBalanceCheck.balance} SOL.`,
+            error: `Insufficient SOL balance. Required: ${totalAmount} SOL, Available: ${solBalanceCheck.balance} SOL.`,
           });
         }
 
@@ -149,26 +209,38 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
           recipientKey
         );
 
-        // Check sender token account (with caching)
+        // Check sender token account
         const senderCacheKey = `${senderPublicKey}:${tokenName}`;
         let senderAccountExists = false;
+        let needToCreateSenderAccount = false;
 
         const cached = tokenAccountCache.get(senderCacheKey);
-        if (cached && Date.now() - cached.timestamp < TOKEN_ACCOUNT_CACHE_TTL) {
+        if (!forceRefresh && cached && Date.now() - cached.timestamp < TOKEN_ACCOUNT_CACHE_TTL) {
           senderAccountExists = cached.exists;
+          console.log('Using cached sender account status:', senderAccountExists);
         } else {
-          const senderTokenAccountInfo = await connection.getAccountInfo(
-            senderTokenAccount
+          const senderTokenAccountInfo = await getAccountInfoWithRetry(
+            connection,
+            senderTokenAccount,
+            3
           );
           senderAccountExists = !!senderTokenAccountInfo;
+          
+          console.log('Fresh sender account check:', {
+            exists: senderAccountExists,
+            accountInfo: senderTokenAccountInfo ? 'Found' : 'Not found'
+          });
+          
           tokenAccountCache.set(senderCacheKey, {
             exists: senderAccountExists,
             timestamp: Date.now(),
           });
         }
 
+        // Handle sender token account
         if (!senderAccountExists) {
-          console.log(`Creating token account for sender: ${senderPublicKey}`);
+          console.log(`Sender token account doesn't exist for: ${senderPublicKey}`);
+          
           transaction.add(
             createAssociatedTokenAccountInstruction(
               sender,
@@ -177,31 +249,40 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
               mint
             )
           );
+          
+          needToCreateSenderAccount = true;
+          console.log('Added instruction to create sender token account');
+        } else {
+          // Account exists, check the actual balance
+          try {
+            const tokenBalance = await connection.getTokenAccountBalance(
+              senderTokenAccount
+            );
+            const balance =
+              Number(tokenBalance.value.amount) /
+              Math.pow(10, tokenBalance.value.decimals);
 
-          return res.status(400).json({
-            error: `A token account will be created for you, but you need to fund it with ${tokenName.toUpperCase()} before making transfers.`,
-          });
-        }
+            console.log(`Token balance check: ${balance} ${tokenName.toUpperCase()}`);
 
-        // Check token balance
-        const tokenBalance = await connection.getTokenAccountBalance(
-          senderTokenAccount
-        );
-        const balance =
-          Number(tokenBalance.value.amount) /
-          Math.pow(10, tokenBalance.value.decimals);
-
-        if (balance < amount) {
-          return res.status(400).json({
-            error: `Insufficient ${tokenName.toUpperCase()} balance. Required: ${amount}, Available: ${balance}.`,
-          });
+            if (balance < totalAmount) {
+              return res.status(400).json({
+                error: `Insufficient ${tokenName.toUpperCase()} balance. Required: ${totalAmount}, Available: ${balance}.`,
+              });
+            }
+          } catch (balanceError) {
+            console.error('Error checking token balance:', balanceError);
+          }
         }
 
         // Check recipient token account
-        const recipientTokenAccountInfo = await connection.getAccountInfo(
-          recipientTokenAccount
+        const recipientTokenAccountInfo = await getAccountInfoWithRetry(
+          connection,
+          recipientTokenAccount,
+          2
         );
+        
         if (!recipientTokenAccountInfo) {
+          console.log('Recipient token account does not exist, adding creation instruction');
           transaction.add(
             createAssociatedTokenAccountInstruction(
               sender,
@@ -212,10 +293,23 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
           );
         }
 
+        if (needToCreateSenderAccount) {
+          console.log('Sender account needs creation - transaction will create it');
+          
+          return res.status(400).json({
+            error: `Your USDC token account needs to be initialized. Please try again - the account will be created automatically if you have SOL for fees.`,
+            needsAccountCreation: true,
+            estimatedFee: "~0.002 SOL"
+          });
+        }
+
+        // Add the transfer instruction
+        const tokenBalance = await connection.getTokenAccountBalance(
+          senderTokenAccount
+        );
         const decimals = tokenBalance.value.decimals;
         const transferAmount = Math.floor(amount * Math.pow(10, decimals));
 
-        // Add transfer instruction
         transaction.add(
           createTransferInstruction(
             senderTokenAccount,
@@ -234,10 +328,33 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = sender;
 
-    const serializedTransaction = transaction.serialize({
-      requireAllSignatures: false,
-      verifySignatures: false,
-    });
+    let serializedTransaction: Buffer;
+    let optimizedBySanctum = false;
+    
+    // NEW: If priority delivery, optimize through Sanctum first
+    if (deliveryMethod === 'priority' && process.env.SANCTUM_API_KEY) {
+      try {
+        console.log('🔧 Optimizing transaction via Sanctum Gateway...');
+        const sanctum = getSanctumGateway(connection);
+        const optimizedBase64 = await sanctum.buildGatewayTransaction(transaction);
+        serializedTransaction = Buffer.from(optimizedBase64, 'base64');
+        optimizedBySanctum = true;
+        console.log('✅ Transaction optimized with Sanctum tips and priority fees');
+      } catch (sanctumError) {
+        console.error('❌ Sanctum optimization failed, using standard transaction:', sanctumError);
+        // Fallback to non-optimized transaction
+        serializedTransaction = transaction.serialize({
+          requireAllSignatures: false,
+          verifySignatures: false,
+        });
+      }
+    } else {
+      // Standard delivery - no optimization needed
+      serializedTransaction = transaction.serialize({
+        requireAllSignatures: false,
+        verifySignatures: false,
+      });
+    }
 
     console.log("Transaction created successfully");
 
@@ -245,6 +362,19 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
     return res.status(200).json({
       transaction: serializedTransaction.toString("base64"),
       tenantId: tenant.id,
+      metadata: {
+        totalAmount: totalAmount.toString(),
+        tokenName,
+        narration,
+        streamId,
+        recipientsCount: recipients.length,
+        recipients: recipients.map(r => ({
+          address: r.recipientPublicKey,
+          amount: r.amount.toString()
+        })),
+        deliveryMethod: deliveryMethod || 'standard',
+        optimizedBySanctum
+      }
     });
   } catch (error) {
     console.error("Error creating transaction:", error);
@@ -254,13 +384,24 @@ export const createTransaction = async (req: TenantRequest, res: Response) => {
   }
 };
 
+/**
+ * Controller for submitting a transaction - ENHANCED WITH PRIORITY DELIVERY
+ */
 export const submitTransaction = async (req: TenantRequest, res: Response) => {
-  const { signedTransaction, wallet } = req.body;
+  const { 
+    signedTransaction, 
+    wallet,
+    amount,
+    tokenName,
+    narration,
+    streamId,
+    recipients,
+    deliveryMethod = 'standard' // NEW: 'standard' or 'priority'
+  } = req.body;
   const tenant = req.tenant;
   let success = false;
 
   try {
-    // Check if response was already sent (by timeout middleware)
     if (res.headersSent) {
       console.log('Response already sent (likely timeout), aborting submitTransaction');
       return;
@@ -277,9 +418,8 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
     const transactionBuffer = Buffer.from(signedTransaction, "base64");
     const transaction = Transaction.from(transactionBuffer);
 
-    // Verify transaction signer
     const signer = transaction.feePayer?.toString();
-    console.log({ signer });
+    console.log({ signer, amount, tokenName, narration, streamId, deliveryMethod });
     
     if (!signer) {
       return res.status(400).json({ 
@@ -287,13 +427,11 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // Check response status before database query
     if (res.headersSent) {
       console.log('Response sent during validation, aborting');
       return;
     }
 
-    // Verify user belongs to tenant
     const user = await executeQuery(
       () => db.user.findFirst({
         where: {
@@ -305,14 +443,32 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
     );
 
     if (!user) {
-      // Check before sending response
       if (res.headersSent) return;
       return res.status(403).json({ 
         error: "Transaction signer not authorized for this tenant" 
       });
     }
 
-    // Generate idempotency key for this transaction
+    if (streamId) {
+      const streamExists = await executeQuery(
+        () => db.stream.findFirst({
+          where: {
+            id: streamId,
+            tenantId: tenant.id,
+          },
+          select: { id: true }
+        }),
+        { maxRetries: 1, timeout: 3000 }
+      );
+
+      if (!streamExists) {
+        if (res.headersSent) return;
+        return res.status(400).json({
+          error: "Invalid stream ID or stream not found"
+        });
+      }
+    }
+
     const idempotencyKey = generateIdempotencyKey(
       'submitTransaction',
       tenant.id,
@@ -320,77 +476,107 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
       signedTransaction.substring(0, 50)
     );
 
-    // Check idempotency to prevent double-spending
     const { cached, result } = await checkIdempotencyFast(
       idempotencyKey,
       async () => {
-        // Check if timed out before blockchain submission
         if (res.headersSent) {
           throw new Error('Request timed out before submission');
         }
 
-        // Submit to blockchain with optimizations
         let signature: string;
-        try {
-          // Send transaction without waiting for confirmation
-          signature = await connection.sendRawTransaction(
-            transaction.serialize(),
-            {
-              skipPreflight: true,  // Skip simulation to save time
-              preflightCommitment: 'confirmed',
-              maxRetries: 3
-            }
-          );
+        let actualDeliveryMethod: 'standard' | 'priority' = 'standard';
 
-          console.log(`Transaction submitted: ${signature}`);
+        try {
+          // Check if priority delivery should be used
+          const usePriorityDelivery = deliveryMethod === 'priority' && process.env.SANCTUM_API_KEY;
+
+          if (usePriorityDelivery) {
+            try {
+              console.log('📤 Using priority delivery (multi-path)...');
+              const sanctum = getSanctumGateway(connection);
+              signature = await sanctum.submitTransaction(transaction);
+              actualDeliveryMethod = 'priority';
+              console.log(`✅ Priority delivery successful: ${signature}`);
+            } catch (priorityError) {
+              console.error('❌ Priority delivery failed, using standard delivery:', priorityError);
+              
+              // Fallback to standard delivery
+              signature = await connection.sendRawTransaction(
+                transaction.serialize(),
+                {
+                  skipPreflight: false,
+                  preflightCommitment: 'confirmed',
+                  maxRetries: 3
+                }
+              );
+              actualDeliveryMethod = 'standard';
+              console.log(`✅ Standard delivery successful (fallback): ${signature}`);
+            }
+          } else {
+            // Use standard delivery
+            console.log('📤 Using standard delivery...');
+            signature = await connection.sendRawTransaction(
+              transaction.serialize(),
+              {
+                skipPreflight: false,
+                preflightCommitment: 'confirmed',
+                maxRetries: 3
+              }
+            );
+            actualDeliveryMethod = 'standard';
+            console.log(`✅ Standard delivery successful: ${signature}`);
+          }
 
           // Start confirmation in background (don't wait)
           connection.confirmTransaction(signature, "confirmed")
-            .then(() => {
-              console.log(`Transaction ${signature} confirmed`);
-              // Since Transaction model doesn't have confirmed field, 
-              // you could update transactionType or add a note
-              db.transaction.updateMany({
-                where: { 
-                  signature,
-                  tenantId: tenant.id 
-                },
-                data: { 
-                  transactionType: 'payment_confirmed' // Update the type to indicate confirmation
-                }
-              }).catch(err => console.error('Failed to update confirmation status:', err));
+            .then(async (result) => {
+              const status = result.value.err ? 'failed' : 'confirmed';
+              console.log(`Transaction ${signature} ${status} (delivery: ${actualDeliveryMethod})`);
+              try {
+                await db.transaction.updateMany({
+                  where: { 
+                    signature,
+                    tenantId: tenant.id 
+                  },
+                  data: { 
+                    status
+                  }
+                });
+              } catch (err) {
+                console.error('Failed to update confirmation status:', err);
+              }
             })
-            .catch(err => {
+            .catch(async (err) => {
               console.error(`Transaction ${signature} failed to confirm:`, err);
-              // Optionally update to indicate failure
-              db.transaction.updateMany({
-                where: { 
-                  signature,
-                  tenantId: tenant.id 
-                },
-                data: { 
-                  transactionType: 'payment_failed'
-                }
-              }).catch(err => console.error('Failed to update failure status:', err));
+              try {
+                await db.transaction.updateMany({
+                  where: { 
+                    signature,
+                    tenantId: tenant.id 
+                  },
+                  data: { 
+                    status: 'failed'
+                  }
+                });
+              } catch (updateErr) {
+                console.error('Failed to update failure status:', updateErr);
+              }
             });
 
         } catch (err: any) {
           console.error("Transaction submission error:", err);
 
-          // Get detailed error information
           let errorMessage = "Failed to submit transaction";
           let errorLogs: string[] = [];
 
           if (err instanceof Error) {
             errorMessage = err.message;
 
-            // Extract Solana-specific error details
             if ('logs' in err) {
               errorLogs = err.logs as string[];
             }
           }
 
-          // Handle specific error cases
           if (errorMessage.includes("Blockhash not found") || 
               errorMessage.includes("blockhash")) {
             throw {
@@ -416,7 +602,6 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
             };
           }
 
-          // Generic error
           throw {
             userError: errorMessage,
             code: "TRANSACTION_FAILED",
@@ -424,13 +609,16 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
           };
         }
 
-        // Check if response was sent while submitting
         if (res.headersSent) {
           console.log('Response sent during blockchain submission');
           throw new Error('Response already sent');
         }
 
-        // Step 1: Record transaction (critical)
+        let recipientAddress: string | null = null;
+        if (recipients && recipients.length === 1) {
+          recipientAddress = recipients[0].address || recipients[0].recipientPublicKey;
+        }
+
         const txRecord = await executeQuery(
           () => db.transaction.create({
             data: {
@@ -438,13 +626,20 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
               createdAt: new Date(),
               tenantId: tenant.id,
               userId: user.id,
-              transactionType: 'payment'  // Will be updated to 'payment_confirmed' by background job
+              transactionType: 'payment',
+              status: 'pending',
+              amount: amount?.toString() || null,
+              tokenName: tokenName || 'SOL',
+              narration: narration || null,
+              streamId: streamId || null,
+              senderAddress: signer,
+              recipientAddress,
+              recipients: recipients ? recipients : null,
             },
           }),
           { maxRetries: 2, timeout: 5000 }
         );
 
-        // Step 2: Update user points (non-critical, fire and forget)
         executeQuery(
           () => db.user.update({
             where: { id: user.id },
@@ -455,18 +650,20 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
           { maxRetries: 1, timeout: 3000 }
         ).catch(err => {
           console.error("Failed to update user points:", err);
-          // Non-critical - continue
         });
 
         return {
           signature: txRecord.signature,
-          points: (user.points || 0) + 5
+          points: (user.points || 0) + 5,
+          transactionId: txRecord.id,
+          status: 'pending',
+          deliveryMethod: actualDeliveryMethod
         };
       },
       { 
         useMemoryCache: true, 
         useDbCache: true, 
-        ttlMinutes: 60 // Cache for 1 hour to prevent double-spending
+        ttlMinutes: 60
       }
     );
 
@@ -474,7 +671,6 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
       console.log(`Returned cached transaction result for idempotency key: ${idempotencyKey}`);
     }
 
-    // Final check before sending response
     if (res.headersSent) {
       console.log('Response already sent, skipping final response');
       return;
@@ -482,22 +678,23 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
 
     success = true;
     return res.json({
-      data: "Payment successful",
+      data: "Payment submitted",
       signature: result.signature,
+      transactionId: result.transactionId,
+      status: result.status || 'pending',
       points: result.points,
-      cached: cached
+      cached: cached,
+      deliveryMethod: result.deliveryMethod || 'standard'
     });
     
   } catch (error: any) {
     console.error("Error submitting transaction:", error);
     
-    // Check if response was already sent
     if (res.headersSent) {
       console.log('Response already sent, skipping error response');
       return;
     }
     
-    // Handle custom error format from idempotency function
     if (error.userError) {
       return res.status(400).json({
         error: error.userError,
@@ -506,10 +703,8 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
       });
     }
 
-    // Handle generic errors
     if (error.message === 'Request timed out before submission' ||
         error.message === 'Response already sent') {
-      // Don't send another response if already timed out
       return;
     }
 
@@ -522,6 +717,7 @@ export const submitTransaction = async (req: TenantRequest, res: Response) => {
   }
 };
 
+// Cleanup cache periodically
 setInterval(() => {
   const now = Date.now();
   for (const [key, value] of tokenAccountCache.entries()) {
@@ -529,207 +725,22 @@ setInterval(() => {
       tokenAccountCache.delete(key);
     }
   }
-}, 60000); // Clean every minute
+}, 60000);
+// ```
 
+// ---
 
+// That's the complete controller file! The key changes are:
 
-/**
- * Controller for submitting a transaction - REFACTORED WITHOUT TRANSACTIONS
- */
-// export const submitTransaction = async (req: TenantRequest, res: Response) => {
-//   const { signedTransaction, wallet } = req.body;
-//   const tenant = req.tenant;
-//   let success = false;
+// 1. ✅ Import `getSanctumGateway` from sanctum.js
+// 2. ✅ Accept `deliveryMethod` parameter in createTransaction
+// 3. ✅ Call `sanctum.buildGatewayTransaction()` when priority delivery is requested
+// 4. ✅ Return optimized transaction to frontend for signing
+// 5. ✅ Submit via Sanctum in submitTransaction controller
 
-//   try {
-//     if (!tenant) {
-//       return res.status(401).json({ error: "Tenant authentication required." });
-//     }
-
-//     if (!signedTransaction) {
-//       return res.status(400).json({ error: "Signed transaction is required" });
-//     }
-
-//     const transactionBuffer = Buffer.from(signedTransaction, "base64");
-//     const transaction = Transaction.from(transactionBuffer);
-
-//     // Verify transaction signer
-//     const signer = transaction.feePayer?.toString();
-//     console.log({ signer });
-
-//     if (!signer) {
-//       return res.status(400).json({
-//         error: "Invalid transaction: no fee payer",
-//       });
-//     }
-
-//     // Verify user belongs to tenant
-//     const user = await executeQuery(
-//       () =>
-//         db.user.findFirst({
-//           where: {
-//             walletAddress: signer,
-//             tenantId: tenant.id,
-//           },
-//         }),
-//       { maxRetries: 1, timeout: 3000 }
-//     );
-
-//     if (!user) {
-//       return res.status(403).json({
-//         error: "Transaction signer not authorized for this tenant",
-//       });
-//     }
-
-//     // Generate idempotency key for this transaction
-//     const idempotencyKey = generateIdempotencyKey(
-//       "submitTransaction",
-//       tenant.id,
-//       signer,
-//       signedTransaction.substring(0, 50) // Use first 50 chars as unique identifier
-//     );
-
-//     // Check idempotency to prevent double-spending
-//     const { cached, result } = await checkIdempotencyFast(
-//       idempotencyKey,
-//       async () => {
-//         // Submit to blockchain
-//         let signature: string;
-//         try {
-//           signature = await connection.sendRawTransaction(
-//             transaction.serialize()
-//           );
-
-//           // Wait for confirmation with timeout
-//           const confirmationPromise = connection.confirmTransaction(
-//             signature,
-//             "confirmed"
-//           );
-//           const timeoutPromise = new Promise((_, reject) =>
-//             setTimeout(() => reject(new Error("Confirmation timeout")), 30000)
-//           );
-
-//           await Promise.race([confirmationPromise, timeoutPromise]);
-//         } catch (err: any) {
-//           console.error("Transaction submission error:", err);
-
-//           // Get detailed error information
-//           let errorMessage = "Failed to submit transaction";
-//           let errorLogs: string[] = [];
-
-//           if (err instanceof Error) {
-//             errorMessage = err.message;
-
-//             // Extract Solana-specific error details
-//             if ("logs" in err) {
-//               errorLogs = err.logs as string[];
-//             }
-//           }
-
-//           // Provide user-friendly error messages
-//           if (
-//             errorMessage.includes(
-//               "Attempt to debit an account but found no record of a prior credit"
-//             )
-//           ) {
-//             throw {
-//               userError:
-//                 "Insufficient funds. The sender account doesn't have enough tokens or SOL.",
-//               logs: errorLogs,
-//             };
-//           }
-
-//           if (errorMessage.includes("blockhash not found")) {
-//             throw {
-//               userError:
-//                 "Transaction expired. Please create a new transaction and try again.",
-//               logs: errorLogs,
-//             };
-//           }
-
-//           if (errorMessage.includes("Confirmation timeout")) {
-//             throw {
-//               userError:
-//                 "Transaction confirmation timeout. The transaction may still be processed.",
-//               logs: errorLogs,
-//             };
-//           }
-
-//           throw {
-//             userError: errorMessage,
-//             logs: errorLogs,
-//           };
-//         }
-
-//         // Step 1: Record transaction (critical)
-//         const txRecord = await executeQuery(
-//           () =>
-//             db.transaction.create({
-//               data: {
-//                 signature,
-//                 createdAt: new Date(),
-//                 tenantId: tenant.id,
-//                 userId: user.id,
-//                 transactionType: "payment",
-//               },
-//             }),
-//           { maxRetries: 2, timeout: 5000 }
-//         );
-
-//         // Step 2: Update user points (non-critical, fire and forget)
-//         executeQuery(
-//           () =>
-//             db.user.update({
-//               where: { id: user.id },
-//               data: {
-//                 points: { increment: 5 },
-//               },
-//             }),
-//           { maxRetries: 1, timeout: 3000 }
-//         ).catch((err) => {
-//           console.error("Failed to update user points:", err);
-//           // Non-critical - continue
-//         });
-
-//         return {
-//           signature: txRecord.signature,
-//           points: (user.points || 0) + 5,
-//         };
-//       },
-//       {
-//         useMemoryCache: true,
-//         useDbCache: true,
-//         ttlMinutes: 60, // Cache for 1 hour to prevent double-spending
-//       }
-//     );
-
-//     if (cached) {
-//       console.log(
-//         `Returned cached transaction result for idempotency key: ${idempotencyKey}`
-//       );
-//     }
-
-//     success = true;
-//     return res.json({
-//       data: "Payment successful",
-//       signature: result.signature,
-//       points: result.points,
-//       cached: cached,
-//     });
-//   } catch (error: any) {
-//     console.error("Error submitting transaction:", error);
-
-//     // Handle custom error format from idempotency function
-//     if (error.userError) {
-//       return res.status(400).json({
-//         error: error.userError,
-//         logs: error.logs || [],
-//       });
-//     }
-
-//     return res.status(500).json({ error: "Failed to submit transaction" });
-//   } finally {
-//     trackQuery(success);
-//   }
-// };
-
+// Now test it and you should see:
+// ```
+// 🔧 Optimizing transaction via Sanctum Gateway...
+// ✅ Transaction optimized with Sanctum tips and priority fees
+// 📤 Using priority delivery (multi-path)...
+// ✅ Priority delivery successful: [signature]
