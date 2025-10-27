@@ -320,6 +320,41 @@ const createWebSocketServer = (server) => {
         }
     };
     /**
+     * Broadcast to all clients with a specific wallet address
+     */
+    const broadcastToWallet = (walletAddress, event, data) => {
+        let sentCount = 0;
+        const message = JSON.stringify({ event, data });
+        Object.values(clientsByRoom).forEach((clients) => {
+            clients.forEach((client) => {
+                const extClient = client;
+                if (extClient.walletAddress === walletAddress &&
+                    client.readyState === WebSocket.OPEN) {
+                    try {
+                        client.send(message);
+                        sentCount++;
+                    }
+                    catch (error) {
+                        console.error(`Error sending to wallet ${walletAddress}:`, error);
+                    }
+                }
+            });
+        });
+        if (sentCount > 0) {
+            console.log(`Sent "${event}" to ${sentCount} clients with wallet ${walletAddress}`);
+        }
+        return sentCount;
+    };
+    /**
+     * Notify balance update for a wallet
+     */
+    const notifyBalanceUpdate = (walletAddress) => {
+        return broadcastToWallet(walletAddress, "balanceUpdate", {
+            wallet: walletAddress,
+            timestamp: Date.now()
+        });
+    };
+    /**
      * Handles client disconnection with grace period
      * @param ws WebSocket connection
      * @param immediate If true, skip grace period
@@ -460,7 +495,7 @@ const createWebSocketServer = (server) => {
                         break;
                     }
                     case "joinRoom": {
-                        const { roomName, participantId } = data;
+                        const { roomName, participantId, walletAddress } = data;
                         console.log(`JoinRoom request: ${participantId} to ${roomName}`);
                         // Cancel any pending disconnect for this participant
                         if (pendingDisconnects[participantId]) {
@@ -484,6 +519,11 @@ const createWebSocketServer = (server) => {
                         // Store room and identity in the WebSocket object
                         extWs.roomName = roomName;
                         extWs.participantId = participantId;
+                        // ADD THESE LINES:
+                        if (walletAddress) {
+                            extWs.walletAddress = walletAddress;
+                            console.log(`Stored wallet ${walletAddress} for ${participantId}`);
+                        }
                         // Add client to tracking collections
                         if (!clientsByRoom[roomName]) {
                             clientsByRoom[roomName] = new Set();
@@ -571,6 +611,16 @@ const createWebSocketServer = (server) => {
                                 event: "raisedHandsUpdate",
                                 data: raisedHands[roomName] || [],
                             }));
+                        }
+                        break;
+                    }
+                    case "transactionConfirmed": {
+                        const { signature, senderWallet, recipientWallet, amount } = data;
+                        console.log(`Transaction confirmed: ${signature} (${amount} USDC)`);
+                        // Simply notify the wallets - works everywhere!
+                        notifyBalanceUpdate(senderWallet);
+                        if (recipientWallet) {
+                            notifyBalanceUpdate(recipientWallet);
                         }
                         break;
                     }

@@ -1,10 +1,7 @@
 import express from "express";
-import { 
-// createTransaction, 
-// submitTransaction,
-getUserTransactionHistory, getStreamTransactionHistory, getTransactionStatus } from "../controllers/transaction.controller.js";
+import { createTransaction, submitTransaction, getUserTransactionHistory, getStreamTransactionHistory, getTransactionStatus } from "../controllers/transaction.controller.js";
 import { singletonController } from "../utils/singleton-controller.js";
-import { submitTransaction, createTransaction } from "../controllers/new-transaction.js";
+// import { submitTransaction, createTransaction } from "../controllers/new-transaction.js";
 const router = express.Router();
 // Transaction creation and submission
 router.post("/create", singletonController('createTransaction', createTransaction));

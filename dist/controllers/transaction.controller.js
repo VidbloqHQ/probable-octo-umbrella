@@ -1,7 +1,8 @@
-import { PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
+import { PublicKey, Transaction, SystemProgram, } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, createTransferInstruction, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, } from "@solana/spl-token";
-import { tokenMintAccounts, connection, checkSolBalance, checkIdempotencyFast, generateIdempotencyKey, } from "../utils/index.js";
+import { tokenMintAccounts, connection, checkSolBalance, checkIdempotencyFast, generateIdempotencyKey, getSanctumGateway, } from "../utils/index.js";
 import { db, executeQuery, trackQuery } from "../prisma.js";
+import { cache } from "../redis.js";
 // Cache for token account checks
 const tokenAccountCache = new Map();
 const TOKEN_ACCOUNT_CACHE_TTL = 30000; // 30 seconds
@@ -14,39 +15,29 @@ async function getAccountInfoWithRetry(connection, account, maxRetries = 3) {
             const info = await connection.getAccountInfo(account);
             if (info !== null)
                 return info;
-            // If null, wait a bit and retry (RPC might be slow)
             if (i < maxRetries - 1) {
                 console.log(`Account info attempt ${i + 1} returned null, retrying...`);
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise((resolve) => setTimeout(resolve, 1000));
             }
         }
         catch (err) {
             console.error(`Attempt ${i + 1} failed:`, err);
             if (i === maxRetries - 1)
                 throw err;
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise((resolve) => setTimeout(resolve, 1000));
         }
     }
     return null;
 }
 /**
- * Controller for creating a transaction - ENHANCED
+ * Controller for creating a transaction - ENHANCED WITH SANCTUM OPTIMIZATION
  */
 export const createTransaction = async (req, res) => {
-    const { senderPublicKey, recipients, tokenName, narration, streamId } = req.body;
+    const { senderPublicKey, recipients, tokenName, narration, streamId, deliveryMethod = "standard", // NEW: Accept delivery method preference
+     } = req.body;
     const tenant = req.tenant;
     let success = false;
-    // Check for force refresh flag
-    const forceRefresh = req.query?.forceRefresh === 'true';
-    // console.log("createTransaction endpoint called");
-    // console.log({ 
-    //   senderPublicKey, 
-    //   recipients: recipients?.length, 
-    //   tokenName,
-    //   narration,
-    //   streamId,
-    //   forceRefresh
-    // });
+    const forceRefresh = req.query?.forceRefresh === "true";
     try {
         // Tenant verification
         if (!tenant) {
@@ -76,7 +67,7 @@ export const createTransaction = async (req, res) => {
                 });
             }
         }
-        // Verify sender belongs to tenant (with cache)
+        // Verify sender belongs to tenant
         const senderUser = await executeQuery(() => db.user.findFirst({
             where: {
                 walletAddress: senderPublicKey,
@@ -152,30 +143,24 @@ export const createTransaction = async (req, res) => {
                 // Get token accounts
                 const senderTokenAccount = await getAssociatedTokenAddress(mint, sender);
                 const recipientTokenAccount = await getAssociatedTokenAddress(mint, recipientKey);
-                // console.log('Token accounts:', {
-                //   senderTokenAccount: senderTokenAccount.toString(),
-                //   recipientTokenAccount: recipientTokenAccount.toString(),
-                //   mint: mint.toString(),
-                //   sender: sender.toString()
-                // });
-                // Check sender token account (with caching unless force refresh)
+                // Check sender token account
                 const senderCacheKey = `${senderPublicKey}:${tokenName}`;
                 let senderAccountExists = false;
                 let needToCreateSenderAccount = false;
                 const cached = tokenAccountCache.get(senderCacheKey);
-                if (!forceRefresh && cached && Date.now() - cached.timestamp < TOKEN_ACCOUNT_CACHE_TTL) {
+                if (!forceRefresh &&
+                    cached &&
+                    Date.now() - cached.timestamp < TOKEN_ACCOUNT_CACHE_TTL) {
                     senderAccountExists = cached.exists;
-                    console.log('Using cached sender account status:', senderAccountExists);
+                    console.log("Using cached sender account status:", senderAccountExists);
                 }
                 else {
-                    // Use retry logic for better reliability
                     const senderTokenAccountInfo = await getAccountInfoWithRetry(connection, senderTokenAccount, 3);
                     senderAccountExists = !!senderTokenAccountInfo;
-                    console.log('Fresh sender account check:', {
+                    console.log("Fresh sender account check:", {
                         exists: senderAccountExists,
-                        accountInfo: senderTokenAccountInfo ? 'Found' : 'Not found'
+                        accountInfo: senderTokenAccountInfo ? "Found" : "Not found",
                     });
-                    // Update cache
                     tokenAccountCache.set(senderCacheKey, {
                         exists: senderAccountExists,
                         timestamp: Date.now(),
@@ -184,12 +169,9 @@ export const createTransaction = async (req, res) => {
                 // Handle sender token account
                 if (!senderAccountExists) {
                     console.log(`Sender token account doesn't exist for: ${senderPublicKey}`);
-                    // Create the ATA instruction
                     transaction.add(createAssociatedTokenAccountInstruction(sender, senderTokenAccount, sender, mint));
                     needToCreateSenderAccount = true;
-                    console.log('Added instruction to create sender token account');
-                    // Note: We'll continue building the transaction
-                    // The account will be created as part of the transaction
+                    console.log("Added instruction to create sender token account");
                 }
                 else {
                     // Account exists, check the actual balance
@@ -205,29 +187,24 @@ export const createTransaction = async (req, res) => {
                         }
                     }
                     catch (balanceError) {
-                        console.error('Error checking token balance:', balanceError);
-                        // If we can't check the balance, let the transaction attempt proceed
-                        // It will fail on-chain if insufficient
+                        console.error("Error checking token balance:", balanceError);
                     }
                 }
                 // Check recipient token account
                 const recipientTokenAccountInfo = await getAccountInfoWithRetry(connection, recipientTokenAccount, 2);
                 if (!recipientTokenAccountInfo) {
-                    console.log('Recipient token account does not exist, adding creation instruction');
+                    console.log("Recipient token account does not exist, adding creation instruction");
                     transaction.add(createAssociatedTokenAccountInstruction(sender, recipientTokenAccount, recipientKey, mint));
                 }
-                // If we need to create the sender account, we can't transfer in the same transaction
-                // unless we're sure they'll have funds after creation
                 if (needToCreateSenderAccount) {
-                    console.log('Sender account needs creation - transaction will create it');
-                    // Return a specific message about account creation
+                    console.log("Sender account needs creation - transaction will create it");
                     return res.status(400).json({
                         error: `Your USDC token account needs to be initialized. Please try again - the account will be created automatically if you have SOL for fees.`,
                         needsAccountCreation: true,
-                        estimatedFee: "~0.002 SOL"
+                        estimatedFee: "~0.002 SOL",
                     });
                 }
-                // Add the transfer instruction (only if sender account exists)
+                // Add the transfer instruction
                 const tokenBalance = await connection.getTokenAccountBalance(senderTokenAccount);
                 const decimals = tokenBalance.value.decimals;
                 const transferAmount = Math.floor(amount * Math.pow(10, decimals));
@@ -238,10 +215,34 @@ export const createTransaction = async (req, res) => {
         const { blockhash } = await connection.getLatestBlockhash("confirmed");
         transaction.recentBlockhash = blockhash;
         transaction.feePayer = sender;
-        const serializedTransaction = transaction.serialize({
-            requireAllSignatures: false,
-            verifySignatures: false,
-        });
+        let serializedTransaction;
+        let optimizedBySanctum = false;
+        // NEW: If priority delivery, optimize through Sanctum first
+        if (deliveryMethod === "priority" && process.env.SANCTUM_API_KEY) {
+            try {
+                console.log("🔧 Optimizing transaction via Sanctum Gateway...");
+                const sanctum = getSanctumGateway(connection);
+                const optimizedBase64 = await sanctum.buildGatewayTransaction(transaction);
+                serializedTransaction = Buffer.from(optimizedBase64, "base64");
+                optimizedBySanctum = true;
+                console.log("✅ Transaction optimized with Sanctum tips and priority fees");
+            }
+            catch (sanctumError) {
+                console.error("❌ Sanctum optimization failed, using standard transaction:", sanctumError);
+                // Fallback to non-optimized transaction
+                serializedTransaction = transaction.serialize({
+                    requireAllSignatures: false,
+                    verifySignatures: false,
+                });
+            }
+        }
+        else {
+            // Standard delivery - no optimization needed
+            serializedTransaction = transaction.serialize({
+                requireAllSignatures: false,
+                verifySignatures: false,
+            });
+        }
         console.log("Transaction created successfully");
         success = true;
         return res.status(200).json({
@@ -253,11 +254,13 @@ export const createTransaction = async (req, res) => {
                 narration,
                 streamId,
                 recipientsCount: recipients.length,
-                recipients: recipients.map(r => ({
+                recipients: recipients.map((r) => ({
                     address: r.recipientPublicKey,
-                    amount: r.amount.toString()
-                }))
-            }
+                    amount: r.amount.toString(),
+                })),
+                deliveryMethod: deliveryMethod || "standard",
+                optimizedBySanctum,
+            },
         });
     }
     catch (error) {
@@ -269,15 +272,16 @@ export const createTransaction = async (req, res) => {
     }
 };
 /**
- * Controller for submitting a transaction - ENHANCED
+ * Controller for submitting a transaction - ENHANCED WITH PRIORITY DELIVERY
  */
 export const submitTransaction = async (req, res) => {
-    const { signedTransaction, wallet, amount, tokenName, narration, streamId, recipients } = req.body;
+    const { signedTransaction, wallet, amount, tokenName, narration, streamId, recipients, deliveryMethod = "standard", // NEW: 'standard' or 'priority'
+     } = req.body;
     const tenant = req.tenant;
     let success = false;
     try {
         if (res.headersSent) {
-            console.log('Response already sent (likely timeout), aborting submitTransaction');
+            console.log("Response already sent (likely timeout), aborting submitTransaction");
             return;
         }
         if (!tenant) {
@@ -289,14 +293,21 @@ export const submitTransaction = async (req, res) => {
         const transactionBuffer = Buffer.from(signedTransaction, "base64");
         const transaction = Transaction.from(transactionBuffer);
         const signer = transaction.feePayer?.toString();
-        console.log({ signer, amount, tokenName, narration, streamId });
+        console.log({
+            signer,
+            amount,
+            tokenName,
+            narration,
+            streamId,
+            deliveryMethod,
+        });
         if (!signer) {
             return res.status(400).json({
-                error: "Invalid transaction: no fee payer"
+                error: "Invalid transaction: no fee payer",
             });
         }
         if (res.headersSent) {
-            console.log('Response sent during validation, aborting');
+            console.log("Response sent during validation, aborting");
             return;
         }
         const user = await executeQuery(() => db.user.findFirst({
@@ -309,7 +320,7 @@ export const submitTransaction = async (req, res) => {
             if (res.headersSent)
                 return;
             return res.status(403).json({
-                error: "Transaction signer not authorized for this tenant"
+                error: "Transaction signer not authorized for this tenant",
             });
         }
         if (streamId) {
@@ -318,46 +329,101 @@ export const submitTransaction = async (req, res) => {
                     id: streamId,
                     tenantId: tenant.id,
                 },
-                select: { id: true }
+                select: { id: true },
             }), { maxRetries: 1, timeout: 3000 });
             if (!streamExists) {
                 if (res.headersSent)
                     return;
                 return res.status(400).json({
-                    error: "Invalid stream ID or stream not found"
+                    error: "Invalid stream ID or stream not found",
                 });
             }
         }
-        const idempotencyKey = generateIdempotencyKey('submitTransaction', tenant.id, signer, signedTransaction.substring(0, 50));
+        const idempotencyKey = generateIdempotencyKey("submitTransaction", tenant.id, signer, signedTransaction.substring(0, 50));
         const { cached, result } = await checkIdempotencyFast(idempotencyKey, async () => {
             if (res.headersSent) {
-                throw new Error('Request timed out before submission');
+                throw new Error("Request timed out before submission");
             }
             let signature;
+            let actualDeliveryMethod = "standard";
             try {
-                signature = await connection.sendRawTransaction(transaction.serialize(), {
-                    skipPreflight: false,
-                    preflightCommitment: 'confirmed',
-                    maxRetries: 3
-                });
-                console.log(`Transaction submitted: ${signature}`);
-                connection.confirmTransaction(signature, "confirmed")
+                // Check if priority delivery should be used
+                const usePriorityDelivery = deliveryMethod === "priority" && process.env.SANCTUM_API_KEY;
+                if (usePriorityDelivery) {
+                    try {
+                        console.log("📤 Using priority delivery (multi-path)...");
+                        const sanctum = getSanctumGateway(connection);
+                        signature = await sanctum.submitTransaction(transaction);
+                        actualDeliveryMethod = "priority";
+                        console.log(`✅ Priority delivery successful: ${signature}`);
+                    }
+                    catch (priorityError) {
+                        console.error("❌ Priority delivery failed, using standard delivery:", priorityError);
+                        // Fallback to standard delivery
+                        signature = await connection.sendRawTransaction(transaction.serialize(), {
+                            skipPreflight: false,
+                            preflightCommitment: "confirmed",
+                            maxRetries: 3,
+                        });
+                        actualDeliveryMethod = "standard";
+                        console.log(`✅ Standard delivery successful (fallback): ${signature}`);
+                    }
+                }
+                else {
+                    // Use standard delivery
+                    console.log("📤 Using standard delivery...");
+                    signature = await connection.sendRawTransaction(transaction.serialize(), {
+                        skipPreflight: false,
+                        preflightCommitment: "confirmed",
+                        maxRetries: 3,
+                    });
+                    actualDeliveryMethod = "standard";
+                    console.log(`✅ Standard delivery successful: ${signature}`);
+                }
+                // Start confirmation in background (don't wait)
+                connection
+                    .confirmTransaction(signature, "confirmed")
                     .then(async (result) => {
-                    console.log(`Transaction ${signature} confirmed`);
-                    const status = result.value.err ? 'failed' : 'confirmed';
+                    const status = result.value.err ? "failed" : "confirmed";
+                    console.log(`Transaction ${signature} ${status} (delivery: ${actualDeliveryMethod})`);
                     try {
                         await db.transaction.updateMany({
                             where: {
                                 signature,
-                                tenantId: tenant.id
+                                tenantId: tenant.id,
                             },
                             data: {
-                                status
-                            }
+                                status,
+                            },
                         });
+                        // Invalidate balance cache when transaction is confirmed
+                        if (status === "confirmed") {
+                            console.log("💾 Transaction confirmed, invalidating balance cache...");
+                            // Invalidate sender's balance cache
+                            try {
+                                await cache.invalidateByTags([`wallet:${signer}`]);
+                                console.log(`✅ Cache invalidated for sender: ${signer}`);
+                            }
+                            catch (cacheErr) {
+                                console.error("❌ Failed to invalidate sender cache:", cacheErr);
+                            }
+                            // Invalidate recipient's balance cache if exists
+                            // Note: recipientAddress is defined earlier in the function (around line 617-620)
+                            if (recipientAddress) {
+                                try {
+                                    await cache.invalidateByTags([
+                                        `wallet:${recipientAddress}`,
+                                    ]);
+                                    console.log(`✅ Cache invalidated for recipient: ${recipientAddress}`);
+                                }
+                                catch (cacheErr) {
+                                    console.error("❌ Failed to invalidate recipient cache:", cacheErr);
+                                }
+                            }
+                        }
                     }
                     catch (err) {
-                        console.error('Failed to update confirmation status:', err);
+                        console.error("Failed to update confirmation status:", err);
                     }
                 })
                     .catch(async (err) => {
@@ -366,15 +432,15 @@ export const submitTransaction = async (req, res) => {
                         await db.transaction.updateMany({
                             where: {
                                 signature,
-                                tenantId: tenant.id
+                                tenantId: tenant.id,
                             },
                             data: {
-                                status: 'failed'
-                            }
+                                status: "failed",
+                            },
                         });
                     }
                     catch (updateErr) {
-                        console.error('Failed to update failure status:', updateErr);
+                        console.error("Failed to update failure status:", updateErr);
                     }
                 });
             }
@@ -384,7 +450,7 @@ export const submitTransaction = async (req, res) => {
                 let errorLogs = [];
                 if (err instanceof Error) {
                     errorMessage = err.message;
-                    if ('logs' in err) {
+                    if ("logs" in err) {
                         errorLogs = err.logs;
                     }
                 }
@@ -393,36 +459,37 @@ export const submitTransaction = async (req, res) => {
                     throw {
                         userError: "Transaction expired. The transaction was created too long ago and is no longer valid. Please create and submit a new transaction immediately.",
                         code: "BLOCKHASH_EXPIRED",
-                        logs: errorLogs
+                        logs: errorLogs,
                     };
                 }
                 if (errorMessage.includes("Attempt to debit an account but found no record of a prior credit")) {
                     throw {
                         userError: "Insufficient funds. The sender account doesn't have enough tokens or SOL.",
                         code: "INSUFFICIENT_FUNDS",
-                        logs: errorLogs
+                        logs: errorLogs,
                     };
                 }
                 if (errorMessage.includes("already been processed")) {
                     throw {
                         userError: "This transaction has already been processed.",
                         code: "DUPLICATE_TRANSACTION",
-                        logs: errorLogs
+                        logs: errorLogs,
                     };
                 }
                 throw {
                     userError: errorMessage,
                     code: "TRANSACTION_FAILED",
-                    logs: errorLogs
+                    logs: errorLogs,
                 };
             }
             if (res.headersSent) {
-                console.log('Response sent during blockchain submission');
-                throw new Error('Response already sent');
+                console.log("Response sent during blockchain submission");
+                throw new Error("Response already sent");
             }
             let recipientAddress = null;
             if (recipients && recipients.length === 1) {
-                recipientAddress = recipients[0].address || recipients[0].recipientPublicKey;
+                recipientAddress =
+                    recipients[0].address || recipients[0].recipientPublicKey;
             }
             const txRecord = await executeQuery(() => db.transaction.create({
                 data: {
@@ -430,10 +497,10 @@ export const submitTransaction = async (req, res) => {
                     createdAt: new Date(),
                     tenantId: tenant.id,
                     userId: user.id,
-                    transactionType: 'payment',
-                    status: 'pending',
+                    transactionType: "payment",
+                    status: "pending",
                     amount: amount?.toString() || null,
-                    tokenName: tokenName || 'SOL',
+                    tokenName: tokenName || "SOL",
                     narration: narration || null,
                     streamId: streamId || null,
                     senderAddress: signer,
@@ -444,27 +511,28 @@ export const submitTransaction = async (req, res) => {
             executeQuery(() => db.user.update({
                 where: { id: user.id },
                 data: {
-                    points: { increment: 5 }
+                    points: { increment: 5 },
                 },
-            }), { maxRetries: 1, timeout: 3000 }).catch(err => {
+            }), { maxRetries: 1, timeout: 3000 }).catch((err) => {
                 console.error("Failed to update user points:", err);
             });
             return {
                 signature: txRecord.signature,
                 points: (user.points || 0) + 5,
                 transactionId: txRecord.id,
-                status: 'pending'
+                status: "pending",
+                deliveryMethod: actualDeliveryMethod,
             };
         }, {
             useMemoryCache: true,
             useDbCache: true,
-            ttlMinutes: 60
+            ttlMinutes: 60,
         });
         if (cached) {
             console.log(`Returned cached transaction result for idempotency key: ${idempotencyKey}`);
         }
         if (res.headersSent) {
-            console.log('Response already sent, skipping final response');
+            console.log("Response already sent, skipping final response");
             return;
         }
         success = true;
@@ -472,31 +540,32 @@ export const submitTransaction = async (req, res) => {
             data: "Payment submitted",
             signature: result.signature,
             transactionId: result.transactionId,
-            status: result.status || 'pending',
+            status: result.status || "pending",
             points: result.points,
-            cached: cached
+            cached: cached,
+            deliveryMethod: result.deliveryMethod || "standard",
         });
     }
     catch (error) {
         console.error("Error submitting transaction:", error);
         if (res.headersSent) {
-            console.log('Response already sent, skipping error response');
+            console.log("Response already sent, skipping error response");
             return;
         }
         if (error.userError) {
             return res.status(400).json({
                 error: error.userError,
                 code: error.code || "TRANSACTION_ERROR",
-                logs: error.logs || []
+                logs: error.logs || [],
             });
         }
-        if (error.message === 'Request timed out before submission' ||
-            error.message === 'Response already sent') {
+        if (error.message === "Request timed out before submission" ||
+            error.message === "Response already sent") {
             return;
         }
         return res.status(500).json({
             error: "Failed to submit transaction",
-            code: "INTERNAL_ERROR"
+            code: "INTERNAL_ERROR",
         });
     }
     finally {
@@ -523,46 +592,48 @@ export const getTransactionStatus = async (req, res) => {
                 signature: true,
                 status: true,
                 createdAt: true,
-            }
+            },
         }), { maxRetries: 1, timeout: 3000 });
         if (!transaction) {
             return res.status(404).json({ error: "Transaction not found" });
         }
-        if (transaction.status === 'pending') {
+        if (transaction.status === "pending") {
             const age = Date.now() - new Date(transaction.createdAt).getTime();
             if (age > 60000) {
                 try {
                     const statusResponse = await connection.getSignatureStatus(signature);
-                    if (statusResponse?.value?.confirmationStatus === 'confirmed' ||
-                        statusResponse?.value?.confirmationStatus === 'finalized') {
+                    if (statusResponse?.value?.confirmationStatus === "confirmed" ||
+                        statusResponse?.value?.confirmationStatus === "finalized") {
                         await db.transaction.update({
                             where: { id: transaction.id },
-                            data: { status: 'confirmed' }
+                            data: { status: "confirmed" },
                         });
-                        transaction.status = 'confirmed';
+                        transaction.status = "confirmed";
                     }
                     else if (statusResponse?.value?.err) {
                         await db.transaction.update({
                             where: { id: transaction.id },
-                            data: { status: 'failed' }
+                            data: { status: "failed" },
                         });
-                        transaction.status = 'failed';
+                        transaction.status = "failed";
                     }
                 }
                 catch (err) {
-                    console.error('Error checking blockchain status:', err);
+                    console.error("Error checking blockchain status:", err);
                 }
             }
         }
         return res.json({
             signature: transaction.signature,
             status: transaction.status,
-            transactionId: transaction.id
+            transactionId: transaction.id,
         });
     }
     catch (error) {
         console.error("Error checking transaction status:", error);
-        return res.status(500).json({ error: "Failed to check transaction status" });
+        return res
+            .status(500)
+            .json({ error: "Failed to check transaction status" });
     }
 };
 /**
@@ -581,7 +652,7 @@ export const getUserTransactionHistory = async (req, res) => {
                 walletAddress: userWallet,
                 tenantId: tenant.id,
             },
-            select: { id: true }
+            select: { id: true },
         }), { maxRetries: 1, timeout: 3000 });
         if (!user) {
             return res.json({
@@ -590,8 +661,8 @@ export const getUserTransactionHistory = async (req, res) => {
                     total: 0,
                     limit: Number(limit),
                     offset: Number(offset),
-                    hasMore: false
-                }
+                    hasMore: false,
+                },
             });
         }
         const where = {
@@ -599,14 +670,14 @@ export const getUserTransactionHistory = async (req, res) => {
             tenantId: tenant.id,
         };
         // Make sure streamId filter is applied when provided
-        if (streamId && streamId !== 'undefined' && streamId !== 'null') {
+        if (streamId && streamId !== "undefined" && streamId !== "null") {
             where.streamId = streamId;
-            console.log('Filtering by streamId:', streamId); // Debug log
+            console.log("Filtering by streamId:", streamId); // Debug log
         }
-        console.log('Query where clause:', where); // Debug log
+        console.log("Query where clause:", where); // Debug log
         const transactions = await executeQuery(() => db.transaction.findMany({
             where,
-            orderBy: { createdAt: 'desc' },
+            orderBy: { createdAt: "desc" },
             take: Number(limit),
             skip: Number(offset),
             include: {
@@ -614,26 +685,31 @@ export const getUserTransactionHistory = async (req, res) => {
                     select: {
                         id: true,
                         name: true,
-                        title: true
-                    }
-                }
-            }
+                        title: true,
+                    },
+                },
+            },
         }), { maxRetries: 1, timeout: 5000 });
-        const total = await executeQuery(() => db.transaction.count({ where }), { maxRetries: 1, timeout: 3000 });
-        console.log(`Found ${transactions.length} transactions for user ${userWallet}${streamId ? ` in stream ${streamId}` : ''}`);
+        const total = await executeQuery(() => db.transaction.count({ where }), {
+            maxRetries: 1,
+            timeout: 3000,
+        });
+        console.log(`Found ${transactions.length} transactions for user ${userWallet}${streamId ? ` in stream ${streamId}` : ""}`);
         return res.json({
             transactions,
             pagination: {
                 total,
                 limit: Number(limit),
                 offset: Number(offset),
-                hasMore: Number(offset) + Number(limit) < total
-            }
+                hasMore: Number(offset) + Number(limit) < total,
+            },
         });
     }
     catch (error) {
         console.error("Error fetching transaction history:", error);
-        return res.status(500).json({ error: "Failed to fetch transaction history" });
+        return res
+            .status(500)
+            .json({ error: "Failed to fetch transaction history" });
     }
 };
 /**
@@ -653,7 +729,7 @@ export const getStreamTransactionHistory = async (req, res) => {
         };
         const transactions = await executeQuery(() => db.transaction.findMany({
             where,
-            orderBy: { createdAt: 'desc' },
+            orderBy: { createdAt: "desc" },
             take: Number(limit),
             skip: Number(offset),
             include: {
@@ -661,14 +737,17 @@ export const getStreamTransactionHistory = async (req, res) => {
                     select: {
                         id: true,
                         walletAddress: true,
-                        name: true
-                    }
-                }
-            }
+                        name: true,
+                    },
+                },
+            },
         }), { maxRetries: 1, timeout: 5000 });
-        const total = await executeQuery(() => db.transaction.count({ where }), { maxRetries: 1, timeout: 3000 });
+        const total = await executeQuery(() => db.transaction.count({ where }), {
+            maxRetries: 1,
+            timeout: 3000,
+        });
         const totalVolume = transactions.reduce((sum, tx) => {
-            const amount = parseFloat(tx.amount || '0');
+            const amount = parseFloat(tx.amount || "0");
             return sum + amount;
         }, 0);
         return res.json({
@@ -681,13 +760,15 @@ export const getStreamTransactionHistory = async (req, res) => {
                 total,
                 limit: Number(limit),
                 offset: Number(offset),
-                hasMore: Number(offset) + Number(limit) < total
-            }
+                hasMore: Number(offset) + Number(limit) < total,
+            },
         });
     }
     catch (error) {
         console.error("Error fetching stream transaction history:", error);
-        return res.status(500).json({ error: "Failed to fetch stream transaction history" });
+        return res
+            .status(500)
+            .json({ error: "Failed to fetch stream transaction history" });
     }
 };
 // Cleanup cache periodically
