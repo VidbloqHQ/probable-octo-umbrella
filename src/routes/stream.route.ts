@@ -14,7 +14,7 @@ import { singletonController } from "../utils/singleton-controller.js";
 // import { authenticateTenant } from "../middlewares/tenant-auth.middleware.js";
 // import { createStream, getStream, createStreamToken } from "../controllers/new-stream.js";
 // import { recordStream, stopStreamRecord, createRecordingBotToken, uploadRecording } from "../controllers/new-stream.js"
-import { streamToYoutube, stopYoutubeStream } from "../controllers/new-stream.js";
+import { streamToYoutube, stopYoutubeStream, streamToFacebook, stopFacebookStream } from "../controllers/new-stream.js";
 
 const router = express.Router();
 
@@ -30,6 +30,8 @@ router.post("/record", singletonController('recordStream', recordStream));
 
 router.post("/youtube", singletonController('streamToYoutube', streamToYoutube));
 router.post("/youtube/stop", singletonController('stopYoutubeStream', stopYoutubeStream));
+router.post("/facebook", singletonController('streamToFacebook', streamToFacebook));
+router.post("/facebook/stop", singletonController('stopFacebookStream', stopFacebookStream));
 
 export default router;
 

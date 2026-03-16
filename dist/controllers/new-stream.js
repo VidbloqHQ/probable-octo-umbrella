@@ -656,3 +656,236 @@ export const stopYoutubeStream = async (req, res) => {
         trackQuery(success);
     }
 };
+/**
+ * Controller for streaming to Facebook Live
+ */
+export const streamToFacebook = async (req, res) => {
+    const { roomName, wallet, facebookRtmpUrl, layout = "speaker", // 'grid', 'speaker', or 'single-speaker'
+    quality = {}, } = req.body;
+    const tenant = req.tenant;
+    let success = false;
+    try {
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        if (!roomName || !wallet || typeof wallet !== "string" || !facebookRtmpUrl) {
+            return res.status(400).json({
+                error: "Missing required fields: room name, wallet, or Facebook RTMP URL",
+            });
+        }
+        if (!isValidWalletAddress(wallet)) {
+            return res.status(400).json({ error: "Invalid wallet address format." });
+        }
+        if (!facebookRtmpUrl.startsWith("rtmp://") &&
+            !facebookRtmpUrl.startsWith("rtmps://")) {
+            return res.status(400).json({
+                error: "Invalid Facebook RTMP URL format. Should start with rtmp:// or rtmps://",
+            });
+        }
+        const [stream, user] = await Promise.all([
+            executeQuery(() => db.stream.findFirst({
+                where: {
+                    name: roomName,
+                    tenantId: tenant.id,
+                },
+                include: {
+                    user: true,
+                },
+            }), { maxRetries: 2, timeout: 10000 }),
+            executeQuery(() => db.user.findFirst({
+                where: {
+                    walletAddress: wallet,
+                    tenantId: tenant.id,
+                },
+            }), { maxRetries: 2, timeout: 10000 }),
+        ]);
+        if (!stream) {
+            return res.status(404).json({ error: "Stream not found." });
+        }
+        if (!user) {
+            return res.status(403).json({ error: "User not found" });
+        }
+        let userType;
+        if (user.id === stream.userId) {
+            userType = "host";
+        }
+        else if (stream.streamSessionType === StreamSessionType.Meeting) {
+            userType = "co-host";
+        }
+        else {
+            userType = "guest";
+        }
+        if (userType !== "host") {
+            return res.status(403).json({
+                error: "Only the host can stream to Facebook.",
+            });
+        }
+        // Optional guard if you want to prevent starting another stream while one is active
+        // if (stream.recording) {
+        //   return res.status(400).json({
+        //     error: "Stream is already being recorded or streamed",
+        //     recordId: stream.recordId,
+        //   });
+        // }
+        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || "", process.env.LIVEKIT_API_SECRET || "");
+        const videoSettings = {
+            width: quality.width || 1920,
+            height: quality.height || 1080,
+            framerate: quality.framerate || 30,
+            videoBitrate: quality.videoBitrate || 4500,
+        };
+        const audioBitrate = quality.audioBitrate || 128;
+        const layoutPreset = layout === "speaker"
+            ? "speaker-dark"
+            : layout === "single-speaker"
+                ? "single-speaker"
+                : "grid-dark";
+        const output = new StreamOutput({
+            protocol: StreamProtocol.RTMP,
+            urls: [facebookRtmpUrl],
+        });
+        let encodingPreset;
+        if (videoSettings.width >= 1920 && videoSettings.height >= 1080) {
+            encodingPreset =
+                videoSettings.framerate >= 60
+                    ? EncodingOptionsPreset.H264_1080P_60
+                    : EncodingOptionsPreset.H264_1080P_30;
+        }
+        else if (videoSettings.width >= 1280 && videoSettings.height >= 720) {
+            encodingPreset =
+                videoSettings.framerate >= 60
+                    ? EncodingOptionsPreset.H264_720P_60
+                    : EncodingOptionsPreset.H264_720P_30;
+        }
+        else {
+            encodingPreset = EncodingOptionsPreset.H264_1080P_30;
+        }
+        const egressInfo = await egressService.startRoomCompositeEgress(roomName, output, {
+            layout: layoutPreset,
+            encodingOptions: encodingPreset,
+            audioOnly: false,
+            videoOnly: false,
+        });
+        if (!egressInfo) {
+            return res.status(500).json({
+                error: "Failed to start Facebook stream. Please try again.",
+            });
+        }
+        await executeQuery(() => db.stream.update({
+            where: { id: stream.id },
+            data: {
+                recording: true,
+                recordId: egressInfo.egressId,
+            },
+        }), { maxRetries: 2, timeout: 10000 });
+        streamCache.delete(`${tenant.id}:${roomName}`);
+        success = true;
+        return res.status(201).json({
+            message: "Facebook streaming started",
+            recordingId: egressInfo.egressId,
+            streamId: stream.id,
+            config: {
+                layout,
+                quality: {
+                    ...videoSettings,
+                    audioBitrate,
+                },
+            },
+        });
+    }
+    catch (error) {
+        console.error("Error starting Facebook stream:", error);
+        return res.status(500).json({
+            error: "Internal server error",
+            details: error instanceof Error ? error.message : String(error),
+        });
+    }
+    finally {
+        trackQuery(success);
+    }
+};
+/**
+ * Controller for stopping Facebook Live stream
+ */
+export const stopFacebookStream = async (req, res) => {
+    const { recordId, wallet } = req.body;
+    const tenant = req.tenant;
+    let success = false;
+    try {
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        if (!recordId || !wallet || typeof wallet !== "string") {
+            return res.status(400).json({
+                error: "Missing required fields: recordId and wallet",
+            });
+        }
+        if (!isValidWalletAddress(wallet)) {
+            return res.status(400).json({ error: "Invalid wallet address format." });
+        }
+        const [stream, user] = await Promise.all([
+            executeQuery(() => db.stream.findFirst({
+                where: {
+                    recordId,
+                    tenantId: tenant.id,
+                    recording: true,
+                },
+                include: {
+                    user: true,
+                },
+            }), { maxRetries: 2, timeout: 10000 }),
+            executeQuery(() => db.user.findFirst({
+                where: {
+                    walletAddress: wallet,
+                    tenantId: tenant.id,
+                },
+            }), { maxRetries: 2, timeout: 10000 }),
+        ]);
+        if (!stream) {
+            return res.status(404).json({ error: "Active Facebook streaming session not found" });
+        }
+        if (!user) {
+            return res.status(403).json({ error: "User not found" });
+        }
+        let userType;
+        if (user.id === stream.userId) {
+            userType = "host";
+        }
+        else if (stream.streamSessionType === StreamSessionType.Meeting) {
+            userType = "co-host";
+        }
+        else {
+            userType = "guest";
+        }
+        if (userType !== "host") {
+            return res.status(403).json({
+                error: "Only the host can stop Facebook streaming.",
+            });
+        }
+        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || "", process.env.LIVEKIT_API_SECRET || "");
+        await egressService.stopEgress(recordId);
+        await executeQuery(() => db.stream.update({
+            where: { id: stream.id },
+            data: {
+                recording: false,
+            },
+        }), { maxRetries: 2, timeout: 10000 });
+        streamCache.delete(`${tenant.id}:${stream.name}`);
+        success = true;
+        return res.status(200).json({
+            message: "Facebook streaming stopped successfully",
+            streamId: stream.id,
+            recordId,
+        });
+    }
+    catch (error) {
+        console.error("Error stopping Facebook stream:", error);
+        return res.status(500).json({
+            error: "Internal server error",
+            details: error instanceof Error ? error.message : String(error),
+        });
+    }
+    finally {
+        trackQuery(success);
+    }
+};
