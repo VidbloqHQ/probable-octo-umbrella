@@ -657,31 +657,25 @@ export const stopYoutubeStream = async (req, res) => {
     }
 };
 /**
- * Controller for streaming to Facebook Live
+ * Controller for streaming to Facebook Live (stream key only)
  */
 export const streamToFacebook = async (req, res) => {
-    const { roomName, wallet, facebookRtmpUrl, layout = "speaker", // 'grid', 'speaker', or 'single-speaker'
-    quality = {}, } = req.body;
+    const { roomName, wallet, facebookStreamKey, layout = "speaker", quality = {}, } = req.body;
     const tenant = req.tenant;
     let success = false;
     try {
         if (!tenant) {
             return res.status(401).json({ error: "Tenant authentication required." });
         }
-        if (!roomName || !wallet || typeof wallet !== "string" || !facebookRtmpUrl) {
+        if (!roomName || !wallet || typeof wallet !== "string" || !facebookStreamKey) {
             return res.status(400).json({
-                error: "Missing required fields: room name, wallet, or Facebook RTMP URL",
+                error: "Missing required fields: roomName, wallet, or facebookStreamKey",
             });
         }
         if (!isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Invalid wallet address format." });
         }
-        if (!facebookRtmpUrl.startsWith("rtmp://") &&
-            !facebookRtmpUrl.startsWith("rtmps://")) {
-            return res.status(400).json({
-                error: "Invalid Facebook RTMP URL format. Should start with rtmp:// or rtmps://",
-            });
-        }
+        const facebookRtmpUrl = `rtmps://rtmp-api.facebook.com/rtmp/${facebookStreamKey.trim()}`;
         const [stream, user] = await Promise.all([
             executeQuery(() => db.stream.findFirst({
                 where: {
@@ -720,13 +714,6 @@ export const streamToFacebook = async (req, res) => {
                 error: "Only the host can stream to Facebook.",
             });
         }
-        // Optional guard if you want to prevent starting another stream while one is active
-        // if (stream.recording) {
-        //   return res.status(400).json({
-        //     error: "Stream is already being recorded or streamed",
-        //     recordId: stream.recordId,
-        //   });
-        // }
         const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || "", process.env.LIVEKIT_API_SECRET || "");
         const videoSettings = {
             width: quality.width || 1920,

@@ -828,14 +828,14 @@ export const stopYoutubeStream = async (req: TenantRequest, res: Response) => {
 };
 
 /**
- * Controller for streaming to Facebook Live
+ * Controller for streaming to Facebook Live (stream key only)
  */
 export const streamToFacebook = async (req: TenantRequest, res: Response) => {
   const {
     roomName,
     wallet,
-    facebookRtmpUrl,
-    layout = "speaker", // 'grid', 'speaker', or 'single-speaker'
+    facebookStreamKey,
+    layout = "speaker",
     quality = {},
   } = req.body;
 
@@ -847,9 +847,9 @@ export const streamToFacebook = async (req: TenantRequest, res: Response) => {
       return res.status(401).json({ error: "Tenant authentication required." });
     }
 
-    if (!roomName || !wallet || typeof wallet !== "string" || !facebookRtmpUrl) {
+    if (!roomName || !wallet || typeof wallet !== "string" || !facebookStreamKey) {
       return res.status(400).json({
-        error: "Missing required fields: room name, wallet, or Facebook RTMP URL",
+        error: "Missing required fields: roomName, wallet, or facebookStreamKey",
       });
     }
 
@@ -857,14 +857,7 @@ export const streamToFacebook = async (req: TenantRequest, res: Response) => {
       return res.status(400).json({ error: "Invalid wallet address format." });
     }
 
-    if (
-      !facebookRtmpUrl.startsWith("rtmp://") &&
-      !facebookRtmpUrl.startsWith("rtmps://")
-    ) {
-      return res.status(400).json({
-        error: "Invalid Facebook RTMP URL format. Should start with rtmp:// or rtmps://",
-      });
-    }
+    const facebookRtmpUrl = `rtmps://rtmp-api.facebook.com/rtmp/${facebookStreamKey.trim()}`;
 
     const [stream, user] = await Promise.all([
       executeQuery(
@@ -901,6 +894,7 @@ export const streamToFacebook = async (req: TenantRequest, res: Response) => {
     }
 
     let userType: "host" | "co-host" | "guest";
+
     if (user.id === stream.userId) {
       userType = "host";
     } else if (stream.streamSessionType === StreamSessionType.Meeting) {
@@ -914,14 +908,6 @@ export const streamToFacebook = async (req: TenantRequest, res: Response) => {
         error: "Only the host can stream to Facebook.",
       });
     }
-
-    // Optional guard if you want to prevent starting another stream while one is active
-    // if (stream.recording) {
-    //   return res.status(400).json({
-    //     error: "Stream is already being recorded or streamed",
-    //     recordId: stream.recordId,
-    //   });
-    // }
 
     const egressService = new EgressClient(
       livekitHost,
