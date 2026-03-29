@@ -1275,6 +1275,8 @@ function buildTemplateUrl({
   url.searchParams.set("token", token);
   url.searchParams.set("layout", layout);
   url.searchParams.set("liveKitUrl", livekitHost.replace(/^http/, "ws"));
+  url.searchParams.set("url", livekitHost.replace(/^http/, "ws"));
+
 
   if (tenant?.logo) {
     url.searchParams.set("logoUrl", tenant.logo);
