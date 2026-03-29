@@ -1,4 +1,4 @@
-import { AccessToken, EgressClient, EncodedFileOutput, StreamOutput, StreamProtocol, } from "livekit-server-sdk";
+import { AccessToken, EgressClient, EncodedFileOutput, StreamOutput, StreamProtocol, EncodingOptionsPreset, } from "livekit-server-sdk";
 import { StreamSessionType, CallType, StreamFundingType } from "@prisma/client";
 import { db, executeQuery, trackQuery } from "../prisma.js";
 import { isValidWalletAddress, roomService, livekitHost, } from "../utils/index.js";
@@ -16,18 +16,21 @@ function generateUniqueStreamName() {
     // 6-character random base
     const segments = 2;
     const segmentLength = 3;
-    const charset = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const charset = "abcdefghijklmnopqrstuvwxyz0123456789";
     function generateSegment() {
-        let segment = '';
+        let segment = "";
         for (let i = 0; i < segmentLength; i++) {
             segment += charset[Math.floor(Math.random() * charset.length)];
         }
         return segment;
     }
-    const base = Array(segments).fill(null).map(() => generateSegment()).join('-');
+    const base = Array(segments)
+        .fill(null)
+        .map(() => generateSegment())
+        .join("-");
     // 3-character timestamp suffix for uniqueness
     const timestamp = Date.now() % 46656; // Ensures 3 chars in base36
-    const suffix = timestamp.toString(36).padStart(3, '0');
+    const suffix = timestamp.toString(36).padStart(3, "0");
     return `${base}-${suffix}`;
 }
 /**
@@ -67,7 +70,7 @@ async function getTenantConfig(tenantId) {
     if (tenantWithDetails) {
         tenantConfigCache.set(tenantId, {
             data: tenantWithDetails,
-            timestamp: Date.now()
+            timestamp: Date.now(),
         });
     }
     return tenantWithDetails;
@@ -499,7 +502,7 @@ export const recordStream = async (req, res) => {
                     walletAddress: wallet,
                     tenantId: tenant.id,
                 },
-            }), { maxRetries: 2, timeout: 10000 })
+            }), { maxRetries: 2, timeout: 10000 }),
         ]);
         if (!stream) {
             return res.status(404).json({ error: "Stream not found." });
@@ -617,7 +620,7 @@ export const stopStreamRecord = async (req, res) => {
                     walletAddress: wallet,
                     tenantId: tenant.id,
                 },
-            }), { maxRetries: 2, timeout: 10000 })
+            }), { maxRetries: 2, timeout: 10000 }),
         ]);
         if (!stream) {
             return res.status(404).json({ error: "Active recording not found" });
@@ -688,7 +691,9 @@ export const updateStream = async (req, res) => {
             return res.status(400).json({ error: "Stream name is required." });
         }
         if (!wallet || !isValidWalletAddress(wallet)) {
-            return res.status(400).json({ error: "Valid wallet address is required." });
+            return res
+                .status(400)
+                .json({ error: "Valid wallet address is required." });
         }
         const [existingStream, requestingUser] = await Promise.all([
             executeQuery(() => db.stream.findFirst({
@@ -705,7 +710,7 @@ export const updateStream = async (req, res) => {
                     walletAddress: wallet,
                     tenantId: tenant.id,
                 },
-            }), { maxRetries: 1, timeout: 2000 })
+            }), { maxRetries: 1, timeout: 2000 }),
         ]);
         // Check abort after queries
         if (res.headersSent || abortController?.signal?.aborted) {
@@ -757,7 +762,9 @@ export const updateStream = async (req, res) => {
                     }
                     const tenantWithDetails = await getTenantConfig(tenant.id);
                     if (!tenantWithDetails) {
-                        return res.status(400).json({ error: "Tenant configuration not found." });
+                        return res
+                            .status(400)
+                            .json({ error: "Tenant configuration not found." });
                     }
                     const defaultEnabledTypes = {
                         enableStream: true,
@@ -805,7 +812,9 @@ export const updateStream = async (req, res) => {
                     updateData.fundingType = fundingType;
                 }
                 if (scheduledFor !== undefined) {
-                    updateData.scheduledFor = scheduledFor ? new Date(scheduledFor) : null;
+                    updateData.scheduledFor = scheduledFor
+                        ? new Date(scheduledFor)
+                        : null;
                 }
             }
             if (callType !== undefined) {
@@ -828,7 +837,9 @@ export const updateStream = async (req, res) => {
             });
         }
         if (Object.keys(updateData).length === 0) {
-            return res.status(400).json({ error: "No valid fields provided for update." });
+            return res
+                .status(400)
+                .json({ error: "No valid fields provided for update." });
         }
         const updatedStream = await executeQuery(() => db.stream.update({
             where: {
@@ -872,7 +883,9 @@ export const endStream = async (req, res) => {
             return res.status(400).json({ error: "Stream name is required." });
         }
         if (!wallet || typeof wallet !== "string") {
-            return res.status(400).json({ error: "Valid wallet address is required." });
+            return res
+                .status(400)
+                .json({ error: "Valid wallet address is required." });
         }
         if (!isValidWalletAddress(wallet)) {
             return res.status(400).json({ error: "Invalid wallet address format." });
@@ -893,7 +906,7 @@ export const endStream = async (req, res) => {
                     walletAddress: wallet,
                     tenantId: tenant.id,
                 },
-            }), { maxRetries: 2, timeout: 10000 })
+            }), { maxRetries: 2, timeout: 10000 }),
         ]);
         if (!existingStream) {
             return res.status(404).json({
@@ -936,7 +949,9 @@ export const endStream = async (req, res) => {
             streamId: endedStream.id,
             streamName: endedStream.name,
             duration: endedStream.startedAt && endedStream.endedAt
-                ? Math.floor((endedStream.endedAt.getTime() - endedStream.startedAt.getTime()) / 1000)
+                ? Math.floor((endedStream.endedAt.getTime() -
+                    endedStream.startedAt.getTime()) /
+                    1000)
                 : null,
         });
     }
@@ -950,11 +965,36 @@ export const endStream = async (req, res) => {
         trackQuery(success);
     }
 };
+function generateEgressToken(roomName) {
+    const at = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, {
+        identity: `egress-template-${Date.now()}`,
+    });
+    at.addGrant({
+        roomJoin: true,
+        room: roomName,
+    });
+    return at.toJwt();
+}
+function buildTemplateUrl({ roomName, token, layout, tenant, }) {
+    const url = new URL("https://livekit-egress-template-tan.vercel.app");
+    url.searchParams.set("roomName", roomName);
+    url.searchParams.set("token", token);
+    url.searchParams.set("layout", layout);
+    // 🔥 Branding (from your DB — already available)
+    if (tenant?.logo)
+        url.searchParams.set("logoUrl", tenant.logo);
+    if (tenant?.primaryColor)
+        url.searchParams.set("accentColor", tenant.primaryColor);
+    if (tenant?.name)
+        url.searchParams.set("tenantName", tenant.name);
+    return url.toString();
+}
 /**
- * Controller for streaming to YouTube - OPTIMIZED
+ * Controller for streaming to YouTube - ENHANCED VERSION
  */
 export const streamToYoutube = async (req, res) => {
-    const { roomName, wallet, youtubeRtmpUrl } = req.body;
+    const { roomName, wallet, youtubeRtmpUrl, layout = "speaker", // 'grid', 'speaker', or 'single-speaker'
+    quality = {}, } = req.body;
     const tenant = req.tenant;
     let success = false;
     try {
@@ -989,17 +1029,17 @@ export const streamToYoutube = async (req, res) => {
                     walletAddress: wallet,
                     tenantId: tenant.id,
                 },
-            }), { maxRetries: 2, timeout: 10000 })
+            }), { maxRetries: 2, timeout: 10000 }),
         ]);
         if (!stream) {
             return res.status(404).json({ error: "Stream not found." });
         }
-        if (stream.recording) {
-            return res.status(400).json({
-                error: "Stream is already being recorded or streamed",
-                recordId: stream.recordId,
-            });
-        }
+        // if (stream.recording) {
+        //   return res.status(400).json({
+        //     error: "Stream is already being recorded or streamed",
+        //     recordId: stream.recordId,
+        //   });
+        // }
         if (!user) {
             return res.status(403).json({ error: "User not found" });
         }
@@ -1019,15 +1059,74 @@ export const streamToYoutube = async (req, res) => {
             });
         }
         const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || "", process.env.LIVEKIT_API_SECRET || "");
-        const output = {
-            stream: new StreamOutput({
-                protocol: StreamProtocol.RTMP,
-                urls: [youtubeRtmpUrl],
-            }),
+        // Quality settings with defaults
+        const videoSettings = {
+            width: quality.width || 1920,
+            height: quality.height || 1080,
+            framerate: quality.framerate || 30,
+            videoBitrate: quality.videoBitrate || 4500,
         };
-        const egressInfo = await egressService.startRoomCompositeEgress(roomName, output);
+        const audioBitrate = quality.audioBitrate || 128;
+        // Determine layout preset
+        const layoutPreset = layout === "speaker"
+            ? "speaker-dark"
+            : layout === "single-speaker"
+                ? "single-speaker"
+                : "grid-dark";
+        // Configure output
+        const output = new StreamOutput({
+            protocol: StreamProtocol.RTMP,
+            urls: [youtubeRtmpUrl],
+        });
+        // Select encoding preset based on quality settings
+        // Note: Presets include proper audio bitrate (128kbps) by default
+        let encodingPreset;
+        if (videoSettings.width >= 1920 && videoSettings.height >= 1080) {
+            // 1080p presets (best quality, includes 128kbps audio)
+            encodingPreset =
+                videoSettings.framerate >= 60
+                    ? EncodingOptionsPreset.H264_1080P_60
+                    : EncodingOptionsPreset.H264_1080P_30;
+        }
+        else if (videoSettings.width >= 1280 && videoSettings.height >= 720) {
+            // 720p presets
+            encodingPreset =
+                videoSettings.framerate >= 60
+                    ? EncodingOptionsPreset.H264_720P_60
+                    : EncodingOptionsPreset.H264_720P_30;
+        }
+        else {
+            // Default to 1080p30 for best quality
+            encodingPreset = EncodingOptionsPreset.H264_1080P_30;
+        }
+        // Start egress
+        // const egressInfo = await egressService.startRoomCompositeEgress(
+        //   roomName,
+        //   output,
+        //   {
+        //     layout: layoutPreset,
+        //     encodingOptions: encodingPreset,
+        //     audioOnly: false,
+        //     videoOnly: false,
+        //   },
+        // );
+        const egressToken = await generateEgressToken(roomName);
+        const templateUrl = buildTemplateUrl({
+            roomName,
+            token: egressToken,
+            layout,
+            tenant,
+        });
+        const egressInfo = await egressService.startRoomCompositeEgress(roomName, output, {
+            customBaseUrl: templateUrl,
+            encodingOptions: encodingPreset,
+            audioOnly: false,
+            videoOnly: false,
+        });
         if (!egressInfo) {
-            return res.status(500).json({ error: "Failed to start YouTube stream. Please try again" });
+            return res.status(500).json({
+                error: "Failed to start YouTube stream. Please try again",
+            });
         }
         await executeQuery(() => db.stream.update({
             where: { id: stream.id },
@@ -1043,6 +1142,10 @@ export const streamToYoutube = async (req, res) => {
             message: "YouTube streaming started",
             recordingId: egressInfo.egressId,
             streamId: stream.id,
+            config: {
+                layout,
+                quality: videoSettings,
+            },
         });
     }
     catch (error) {
@@ -1056,9 +1159,7 @@ export const streamToYoutube = async (req, res) => {
         trackQuery(success);
     }
 };
-/**
- * Controller for stopping YouTube stream - OPTIMIZED
- */
+// Stop controller remains the same
 export const stopYoutubeStream = async (req, res) => {
     const { recordId, wallet } = req.body;
     const tenant = req.tenant;
@@ -1091,10 +1192,12 @@ export const stopYoutubeStream = async (req, res) => {
                     walletAddress: wallet,
                     tenantId: tenant.id,
                 },
-            }), { maxRetries: 2, timeout: 10000 })
+            }), { maxRetries: 2, timeout: 10000 }),
         ]);
         if (!stream) {
-            return res.status(404).json({ error: "Active streaming session not found" });
+            return res
+                .status(404)
+                .json({ error: "Active streaming session not found" });
         }
         if (!user) {
             return res.status(403).json({ error: "User not found" });
@@ -1122,7 +1225,6 @@ export const stopYoutubeStream = async (req, res) => {
                 recording: false,
             },
         }), { maxRetries: 2, timeout: 10000 });
-        // Invalidate cache
         streamCache.delete(`${tenant.id}:${stream.name}`);
         success = true;
         return res.status(200).json({
@@ -1133,6 +1235,240 @@ export const stopYoutubeStream = async (req, res) => {
     }
     catch (error) {
         console.error("Error stopping YouTube stream:", error);
+        return res.status(500).json({
+            error: "Internal server error",
+            details: error instanceof Error ? error.message : String(error),
+        });
+    }
+    finally {
+        trackQuery(success);
+    }
+};
+/**
+ * Controller for streaming to Facebook Live (stream key only)
+ */
+export const streamToFacebook = async (req, res) => {
+    const { roomName, wallet, facebookStreamKey, layout = "speaker", quality = {}, } = req.body;
+    const tenant = req.tenant;
+    let success = false;
+    try {
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        if (!roomName ||
+            !wallet ||
+            typeof wallet !== "string" ||
+            !facebookStreamKey) {
+            return res.status(400).json({
+                error: "Missing required fields: roomName, wallet, or facebookStreamKey",
+            });
+        }
+        if (!isValidWalletAddress(wallet)) {
+            return res.status(400).json({ error: "Invalid wallet address format." });
+        }
+        const facebookRtmpUrl = `rtmps://rtmp-api.facebook.com/rtmp/${facebookStreamKey.trim()}`;
+        const [stream, user] = await Promise.all([
+            executeQuery(() => db.stream.findFirst({
+                where: {
+                    name: roomName,
+                    tenantId: tenant.id,
+                },
+                include: {
+                    user: true,
+                },
+            }), { maxRetries: 2, timeout: 10000 }),
+            executeQuery(() => db.user.findFirst({
+                where: {
+                    walletAddress: wallet,
+                    tenantId: tenant.id,
+                },
+            }), { maxRetries: 2, timeout: 10000 }),
+        ]);
+        if (!stream) {
+            return res.status(404).json({ error: "Stream not found." });
+        }
+        if (!user) {
+            return res.status(403).json({ error: "User not found" });
+        }
+        let userType;
+        if (user.id === stream.userId) {
+            userType = "host";
+        }
+        else if (stream.streamSessionType === StreamSessionType.Meeting) {
+            userType = "co-host";
+        }
+        else {
+            userType = "guest";
+        }
+        if (userType !== "host") {
+            return res.status(403).json({
+                error: "Only the host can stream to Facebook.",
+            });
+        }
+        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || "", process.env.LIVEKIT_API_SECRET || "");
+        const videoSettings = {
+            width: quality.width || 1920,
+            height: quality.height || 1080,
+            framerate: quality.framerate || 30,
+            videoBitrate: quality.videoBitrate || 4500,
+        };
+        const audioBitrate = quality.audioBitrate || 128;
+        const layoutPreset = layout === "speaker"
+            ? "speaker-dark"
+            : layout === "single-speaker"
+                ? "single-speaker"
+                : "grid-dark";
+        const output = new StreamOutput({
+            protocol: StreamProtocol.RTMP,
+            urls: [facebookRtmpUrl],
+        });
+        let encodingPreset;
+        if (videoSettings.width >= 1920 && videoSettings.height >= 1080) {
+            encodingPreset =
+                videoSettings.framerate >= 60
+                    ? EncodingOptionsPreset.H264_1080P_60
+                    : EncodingOptionsPreset.H264_1080P_30;
+        }
+        else if (videoSettings.width >= 1280 && videoSettings.height >= 720) {
+            encodingPreset =
+                videoSettings.framerate >= 60
+                    ? EncodingOptionsPreset.H264_720P_60
+                    : EncodingOptionsPreset.H264_720P_30;
+        }
+        else {
+            encodingPreset = EncodingOptionsPreset.H264_1080P_30;
+        }
+        // 🔥 Generate token for template
+        const egressToken = await generateEgressToken(roomName);
+        // 🔥 Build template URL
+        const templateUrl = buildTemplateUrl({
+            roomName,
+            token: egressToken,
+            layout,
+            tenant,
+        });
+        const egressInfo = await egressService.startRoomCompositeEgress(roomName, output, {
+            customBaseUrl: templateUrl,
+            encodingOptions: encodingPreset,
+            audioOnly: false,
+            videoOnly: false,
+        });
+        if (!egressInfo) {
+            return res.status(500).json({
+                error: "Failed to start Facebook stream. Please try again.",
+            });
+        }
+        await executeQuery(() => db.stream.update({
+            where: { id: stream.id },
+            data: {
+                recording: true,
+                recordId: egressInfo.egressId,
+            },
+        }), { maxRetries: 2, timeout: 10000 });
+        streamCache.delete(`${tenant.id}:${roomName}`);
+        success = true;
+        return res.status(201).json({
+            message: "Facebook streaming started",
+            recordingId: egressInfo.egressId,
+            streamId: stream.id,
+            config: {
+                layout,
+                quality: {
+                    ...videoSettings,
+                    audioBitrate,
+                },
+            },
+        });
+    }
+    catch (error) {
+        console.error("Error starting Facebook stream:", error);
+        return res.status(500).json({
+            error: "Internal server error",
+            details: error instanceof Error ? error.message : String(error),
+        });
+    }
+    finally {
+        trackQuery(success);
+    }
+};
+/**
+ * Controller for stopping Facebook Live stream
+ */
+export const stopFacebookStream = async (req, res) => {
+    const { recordId, wallet } = req.body;
+    const tenant = req.tenant;
+    let success = false;
+    try {
+        if (!tenant) {
+            return res.status(401).json({ error: "Tenant authentication required." });
+        }
+        if (!recordId || !wallet || typeof wallet !== "string") {
+            return res.status(400).json({
+                error: "Missing required fields: recordId and wallet",
+            });
+        }
+        if (!isValidWalletAddress(wallet)) {
+            return res.status(400).json({ error: "Invalid wallet address format." });
+        }
+        const [stream, user] = await Promise.all([
+            executeQuery(() => db.stream.findFirst({
+                where: {
+                    recordId,
+                    tenantId: tenant.id,
+                    recording: true,
+                },
+                include: {
+                    user: true,
+                },
+            }), { maxRetries: 2, timeout: 10000 }),
+            executeQuery(() => db.user.findFirst({
+                where: {
+                    walletAddress: wallet,
+                    tenantId: tenant.id,
+                },
+            }), { maxRetries: 2, timeout: 10000 }),
+        ]);
+        if (!stream) {
+            return res
+                .status(404)
+                .json({ error: "Active Facebook streaming session not found" });
+        }
+        if (!user) {
+            return res.status(403).json({ error: "User not found" });
+        }
+        let userType;
+        if (user.id === stream.userId) {
+            userType = "host";
+        }
+        else if (stream.streamSessionType === StreamSessionType.Meeting) {
+            userType = "co-host";
+        }
+        else {
+            userType = "guest";
+        }
+        if (userType !== "host") {
+            return res.status(403).json({
+                error: "Only the host can stop Facebook streaming.",
+            });
+        }
+        const egressService = new EgressClient(livekitHost, process.env.LIVEKIT_API_KEY || "", process.env.LIVEKIT_API_SECRET || "");
+        await egressService.stopEgress(recordId);
+        await executeQuery(() => db.stream.update({
+            where: { id: stream.id },
+            data: {
+                recording: false,
+            },
+        }), { maxRetries: 2, timeout: 10000 });
+        streamCache.delete(`${tenant.id}:${stream.name}`);
+        success = true;
+        return res.status(200).json({
+            message: "Facebook streaming stopped successfully",
+            streamId: stream.id,
+            recordId,
+        });
+    }
+    catch (error) {
+        console.error("Error stopping Facebook stream:", error);
         return res.status(500).json({
             error: "Internal server error",
             details: error instanceof Error ? error.message : String(error),

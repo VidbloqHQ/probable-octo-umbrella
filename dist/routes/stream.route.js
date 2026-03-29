@@ -2,7 +2,7 @@ import express from "express";
 import { createStream, createStreamToken, getStream, recordStream, 
 // stopYoutubeStream,
 // streamToYoutube,
-updateStream,
+updateStream, streamToYoutube, stopYoutubeStream, streamToFacebook, stopFacebookStream,
 // stopStreamRecord,
  } from "../controllers/stream.controller.js";
 // import { safeController } from "../middlewares/request-lock.middleware.js";
@@ -10,7 +10,7 @@ import { singletonController } from "../utils/singleton-controller.js";
 // import { authenticateTenant } from "../middlewares/tenant-auth.middleware.js";
 // import { createStream, getStream, createStreamToken } from "../controllers/new-stream.js";
 // import { recordStream, stopStreamRecord, createRecordingBotToken, uploadRecording } from "../controllers/new-stream.js"
-import { streamToYoutube, stopYoutubeStream, streamToFacebook, stopFacebookStream } from "../controllers/new-stream.js";
+// import { streamToYoutube, stopYoutubeStream, streamToFacebook, stopFacebookStream } from "../controllers/new-stream.js";
 const router = express.Router();
 router.post("/", singletonController('createStream', createStream));
 router.post("/token", createStreamToken);
