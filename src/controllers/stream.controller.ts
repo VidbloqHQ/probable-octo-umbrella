@@ -1269,17 +1269,24 @@ function buildTemplateUrl({
   layout: string;
   tenant: any;
 }) {
-  const url = new URL("https://livekit-egress-template-tan.vercel.app");
+  const url = new URL("https://livekit-egress-template-tan.vercel.app/");
 
   url.searchParams.set("roomName", roomName);
   url.searchParams.set("token", token);
   url.searchParams.set("layout", layout);
+  url.searchParams.set("liveKitUrl", livekitHost.replace(/^http/, "ws"));
 
-  // 🔥 Branding (from your DB — already available)
-  if (tenant?.logo) url.searchParams.set("logoUrl", tenant.logo);
-  if (tenant?.primaryColor)
+  if (tenant?.logo) {
+    url.searchParams.set("logoUrl", tenant.logo);
+  }
+
+  if (tenant?.primaryColor) {
     url.searchParams.set("accentColor", tenant.primaryColor);
-  if (tenant?.name) url.searchParams.set("tenantName", tenant.name);
+  }
+
+  if (tenant?.name) {
+    url.searchParams.set("tenantName", tenant.name);
+  }
 
   return url.toString();
 }
@@ -1428,18 +1435,6 @@ export const streamToYoutube = async (req: TenantRequest, res: Response) => {
       encodingPreset = EncodingOptionsPreset.H264_1080P_30;
     }
 
-    // Start egress
-    // const egressInfo = await egressService.startRoomCompositeEgress(
-    //   roomName,
-    //   output,
-    //   {
-    //     layout: layoutPreset,
-    //     encodingOptions: encodingPreset,
-    //     audioOnly: false,
-    //     videoOnly: false,
-    //   },
-    // );
-
     const egressToken = await generateEgressToken(roomName);
 
     const templateUrl = buildTemplateUrl({
@@ -1448,6 +1443,8 @@ export const streamToYoutube = async (req: TenantRequest, res: Response) => {
       layout,
       tenant,
     });
+
+    console.log("TEMPLATE URL:", templateUrl);
 
     const egressInfo = await egressService.startRoomCompositeEgress(
       roomName,
@@ -1744,16 +1741,16 @@ export const streamToFacebook = async (req: TenantRequest, res: Response) => {
       encodingPreset = EncodingOptionsPreset.H264_1080P_30;
     }
 
-    // 🔥 Generate token for template
     const egressToken = await generateEgressToken(roomName);
 
-    // 🔥 Build template URL
     const templateUrl = buildTemplateUrl({
       roomName,
       token: egressToken,
       layout,
       tenant,
     });
+
+    console.log("TEMPLATE URL:", templateUrl);
 
     const egressInfo = await egressService.startRoomCompositeEgress(
       roomName,

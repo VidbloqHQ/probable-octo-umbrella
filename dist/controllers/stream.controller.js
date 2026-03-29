@@ -976,17 +976,20 @@ function generateEgressToken(roomName) {
     return at.toJwt();
 }
 function buildTemplateUrl({ roomName, token, layout, tenant, }) {
-    const url = new URL("https://livekit-egress-template-tan.vercel.app");
+    const url = new URL("https://livekit-egress-template-tan.vercel.app/");
     url.searchParams.set("roomName", roomName);
     url.searchParams.set("token", token);
     url.searchParams.set("layout", layout);
-    // 🔥 Branding (from your DB — already available)
-    if (tenant?.logo)
+    url.searchParams.set("liveKitUrl", livekitHost.replace(/^http/, "ws"));
+    if (tenant?.logo) {
         url.searchParams.set("logoUrl", tenant.logo);
-    if (tenant?.primaryColor)
+    }
+    if (tenant?.primaryColor) {
         url.searchParams.set("accentColor", tenant.primaryColor);
-    if (tenant?.name)
+    }
+    if (tenant?.name) {
         url.searchParams.set("tenantName", tenant.name);
+    }
     return url.toString();
 }
 /**
@@ -1099,17 +1102,6 @@ export const streamToYoutube = async (req, res) => {
             // Default to 1080p30 for best quality
             encodingPreset = EncodingOptionsPreset.H264_1080P_30;
         }
-        // Start egress
-        // const egressInfo = await egressService.startRoomCompositeEgress(
-        //   roomName,
-        //   output,
-        //   {
-        //     layout: layoutPreset,
-        //     encodingOptions: encodingPreset,
-        //     audioOnly: false,
-        //     videoOnly: false,
-        //   },
-        // );
         const egressToken = await generateEgressToken(roomName);
         const templateUrl = buildTemplateUrl({
             roomName,
@@ -1117,6 +1109,7 @@ export const streamToYoutube = async (req, res) => {
             layout,
             tenant,
         });
+        console.log("TEMPLATE URL:", templateUrl);
         const egressInfo = await egressService.startRoomCompositeEgress(roomName, output, {
             customBaseUrl: templateUrl,
             encodingOptions: encodingPreset,
@@ -1338,15 +1331,14 @@ export const streamToFacebook = async (req, res) => {
         else {
             encodingPreset = EncodingOptionsPreset.H264_1080P_30;
         }
-        // 🔥 Generate token for template
         const egressToken = await generateEgressToken(roomName);
-        // 🔥 Build template URL
         const templateUrl = buildTemplateUrl({
             roomName,
             token: egressToken,
             layout,
             tenant,
         });
+        console.log("TEMPLATE URL:", templateUrl);
         const egressInfo = await egressService.startRoomCompositeEgress(roomName, output, {
             customBaseUrl: templateUrl,
             encodingOptions: encodingPreset,
