@@ -26,9 +26,14 @@ model Tenant {
   networkCluster      String?
   defaultStreamType   StreamSessionType    @default(Meeting)
   defaultFundingType  StreamFundingType    @default(Live)
+  webhookUrl          String?
+  webhookSecret       String?
   agendas             Agenda[]
   apiTokens           ApiToken[]
   authorizedDomains   AuthorizedDomain[]
+  // bets                Bet[]
+  // bettingMarkets      BettingMarket[]
+  // bettorPositions     BettorPosition[]
   enabledStreamTypes  EnabledStreamTypes?
   participants        Participant[]
   programStreams      ProgramStream[]
@@ -37,6 +42,7 @@ model Tenant {
   streamDonations     StreamDonation[]
   transactions        Transaction[]
   users               User[]
+  // sportsAnalyticsSessions SportsAnalyticsSession[]
 }
 
 model ApiToken {
@@ -76,6 +82,8 @@ model User {
   points              Int?
   tenantId            String
   accounts            Account[]
+  // bets                Bet[]
+  // bettorPositions     BettorPosition[]
   solanaStreams       ProgramStream[]
   streams             Stream[]
   streamDistributions StreamDistribution[]
@@ -174,6 +182,8 @@ model Transaction {
   recipientAddress String?
   recipients       Json?
   status           String?             @default("pending")
+  // betId            String?
+  // bet              Bet?                @relation(fields: [betId], references: [id])
   distribution     StreamDistribution? @relation(fields: [distributionId], references: [id])
   donation         StreamDonation?     @relation(fields: [donationId], references: [id])
   programStream    ProgramStream?      @relation(fields: [solanaStreamId], references: [id])
@@ -189,6 +199,7 @@ model Transaction {
   @@index([distributionId], map: "idx_transaction_distributionid")
   @@index([donationId], map: "idx_transaction_donationid")
   @@index([solanaStreamId], map: "idx_transaction_solanastreamid")
+  // @@index([betId])
 }
 
 model Agenda {
@@ -347,6 +358,7 @@ model ProgramStream {
   updateTransactionSignature   String?
   tenantId                     String
   userId                       String
+  // bettingMarket                BettingMarket[]
   tenant                       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user                         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   distributions                StreamDistribution[]
@@ -418,6 +430,161 @@ model IdempotencyKey {
   @@index([expiresAt])
 }
 
+// model Bet {
+//   id                   String        @id @default(cuid())
+//   marketId             String
+//   bettorWallet         String
+//   outcomeId            Int
+//   amount               BigInt
+//   shares               BigInt        @default(0)
+//   entryPrice           BigInt        @default(0)
+//   status               String        @default("pending")
+//   transactionSignature String?
+//   createdAt            DateTime      @default(now())
+//   confirmedAt          DateTime?
+//   tenantId             String
+//   userId               String
+//   bettingMarket        BettingMarket @relation(fields: [marketId], references: [id], onDelete: Cascade)
+//   tenant               Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+//   user                 User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+//   transaction          Transaction[]
+
+//   @@index([bettorWallet])
+//   @@index([marketId, bettorWallet])
+//   @@index([marketId])
+//   @@index([tenantId, userId])
+// }
+
+// model BettingMarket {
+//   id               String              @id @default(dbgenerated("(gen_random_uuid())::text"))
+//   streamId         String
+//   bettingMarketPDA String              @unique
+//   marketVaultPDA   String
+//   title            String
+//   description      String?
+//   marketType       BettingMarketType
+//   status           BettingMarketStatus @default(Open)
+//   totalPool        BigInt              @default(0)
+//   feeRate          Int                 @default(500)
+//   liquidity        BigInt              @default(0)
+//   createdAt        DateTime            @default(now())
+//   endTime          DateTime?
+//   resolvedAt       DateTime?
+//   winningOutcome   Int?
+//   tenantId         String
+//   bet              Bet[]
+//   programStream    ProgramStream       @relation(fields: [streamId], references: [id], onDelete: Cascade)
+//   tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+//   bettorPosition   BettorPosition[]
+//   marketOutcome    MarketOutcome[]
+
+//   @@index([status])
+//   @@index([streamId])
+//   @@index([streamId, status])
+//   @@index([tenantId])
+// }
+
+// model BettorPosition {
+//   id                        String        @id @default(dbgenerated("(gen_random_uuid())::text"))
+//   marketId                  String
+//   bettorPositionPDA         String        @unique
+//   bettorWallet              String
+//   totalInvested             BigInt        @default(0)
+//   hasClaimed                Boolean       @default(false)
+//   claimTransactionSignature String?
+//   claimedAt                 DateTime?
+//   createdAt                 DateTime      @default(now())
+//   updatedAt                 DateTime
+//   tenantId                  String
+//   userId                    String
+//   positions                 Json          @default("[]")
+//   bettingMarket             BettingMarket @relation(fields: [marketId], references: [id], onDelete: Cascade)
+//   tenant                    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+//   user                      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+//   @@unique([marketId, bettorWallet])
+//   @@index([bettorWallet])
+//   @@index([marketId, bettorWallet])
+//   @@index([marketId])
+//   @@index([tenantId, userId])
+// }
+
+// model MarketOutcome {
+//   id            String        @id @default(dbgenerated("(gen_random_uuid())::text"))
+//   marketId      String
+//   outcomeId     Int
+//   title         String
+//   description   String?
+//   shares        BigInt        @default(0)
+//   bettingMarket BettingMarket @relation(fields: [marketId], references: [id], onDelete: Cascade)
+
+//   @@unique([marketId, outcomeId])
+//   @@index([marketId])
+// }
+
+// model SportsAnalyticsSession {
+//   id          String            @id @default(cuid())
+//   roomId      String
+//   tenantId    String
+//   sportType   SportType         @default(Football)
+//   status      AnalyticsStatus   @default(Active)
+//   config      Json?
+//   stats       Json?
+//   createdAt   DateTime          @default(now())
+//   startedAt   DateTime?
+//   endedAt     DateTime?
+//   tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+//   detections  SportsDetection[]
+//   events      SportsEvent[]
+
+//   @@unique([roomId, tenantId])
+//   @@index([roomId])
+//   @@index([tenantId])
+//   @@index([status])
+// }
+
+// model SportsDetection {
+//   id          String                   @id @default(cuid())
+//   sessionId   String
+//   timestamp   DateTime                 @default(now())
+//   frameNumber Int
+//   detections  Json
+//   classCounts Json
+//   session     SportsAnalyticsSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+//   @@index([sessionId])
+//   @@index([sessionId, timestamp])
+// }
+
+// model SportsEvent {
+//   id         String                   @id @default(cuid())
+//   sessionId  String
+//   eventType  String
+//   timestamp  DateTime                 @default(now())
+//   confidence Float
+//   metadata   Json?
+//   session    SportsAnalyticsSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+//   @@index([sessionId])
+//   @@index([eventType])
+//   @@index([sessionId, timestamp])
+// }
+
+// enum SportType {
+//   Football
+//   Basketball
+//   Baseball
+//   Hockey
+//   Tennis
+//   Volleyball
+// }
+
+// enum AnalyticsStatus {
+//   Active
+//   Paused
+//   Stopped
+// }
+
 enum AgendaAction {
   Poll
   Q_A
@@ -448,3 +615,17 @@ enum ProgramStreamStatus {
   Completed
   Cancelled
 }
+
+// enum BettingMarketStatus {
+//   Open
+//   Locked
+//   Resolved
+//   Cancelled
+// }
+
+// enum BettingMarketType {
+//   Binary
+//   MultiOutcome
+//   OverUnder
+//   Categorical
+// }
