@@ -122,6 +122,8 @@ async function prewarmCache() {
                     rpcEndpoint: true,
                     networkCluster: true,
                     defaultStreamType: true,
+                    webhookUrl: true, // ← add
+                    webhookSecret: true,
                     defaultFundingType: true,
                 }
             }), { maxRetries: 1, timeout: 5000 });
@@ -143,7 +145,7 @@ async function prewarmCache() {
                     });
                 }
             });
-            console.log(`[Auth] Pre-warmed cache with ${recentTokens.length} frequently used API keys`);
+            // console.log(`[Auth] Pre-warmed cache with ${recentTokens.length} frequently used API keys`);
         }
     }
     catch (error) {
@@ -163,7 +165,7 @@ export const authenticateTenant = async (req, res, next) => {
         return next();
     }
     const startTime = Date.now();
-    console.log(`[AUTH] Starting authentication`);
+    // console.log(`[AUTH] Starting authentication`);
     let success = false;
     try {
         const apiKey = req.headers["x-api-key"];
@@ -184,7 +186,7 @@ export const authenticateTenant = async (req, res, next) => {
                 success = true;
                 const elapsed = Date.now() - startTime;
                 if (elapsed > 100) {
-                    console.log(`[Auth] Cache hit but slow: ${elapsed}ms`);
+                    // console.log(`[Auth] Cache hit but slow: ${elapsed}ms`);
                 }
                 // Update lastUsedAt asynchronously (fire and forget)
                 executeQuery(() => db.apiToken.update({
@@ -192,7 +194,7 @@ export const authenticateTenant = async (req, res, next) => {
                     data: { lastUsedAt: new Date() },
                     select: { id: true }
                 }), { maxRetries: 1, timeout: 2000 }).catch(() => { });
-                console.log(`[AUTH] Authentication completed in ${Date.now() - startTime}ms`);
+                // console.log(`[AUTH] Authentication completed in ${Date.now() - startTime}ms`);
                 return next();
             }
             // Cache hit but secret not verified yet
@@ -203,7 +205,7 @@ export const authenticateTenant = async (req, res, next) => {
                 success = true;
                 const elapsed = Date.now() - startTime;
                 if (elapsed > 100) {
-                    console.log(`[Auth] Partial cache hit but slow: ${elapsed}ms`);
+                    // console.log(`[Auth] Partial cache hit but slow: ${elapsed}ms`);
                 }
                 // Update lastUsedAt asynchronously
                 executeQuery(() => db.apiToken.update({
@@ -249,6 +251,8 @@ export const authenticateTenant = async (req, res, next) => {
                         networkCluster: true,
                         defaultStreamType: true,
                         defaultFundingType: true,
+                        webhookUrl: true, // ← add
+                        webhookSecret: true,
                     }
                 }
             }
@@ -368,7 +372,7 @@ export function getAuthStats() {
 // Clear cache (for emergencies or testing)
 export function clearAuthCache() {
     authCache.clear();
-    console.log('[Auth] Cache cleared');
+    // console.log('[Auth] Cache cleared');
 }
 // Export for testing
 export { prewarmCache };

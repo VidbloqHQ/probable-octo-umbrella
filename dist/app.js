@@ -1,6 +1,10 @@
 import express from "express";
 import { createServer } from "http";
-import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, TransactionRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter, QArouter, BalanceRouter, } from "./routes/index.js";
+import { TenantRouter, UserRouter, StreamRouter, AgendaRouter, PaymentRouter, TransactionRouter, PollRouter, ParticipantRouter, QuizRouter, TenantMeRouter, ProgramRouter, MonitorRouter, QArouter, BalanceRouter, 
+// AIRouter,
+// VideoProcessingRouter,
+// SportsRouter,
+WebhookRouter } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 import { requestLockMiddleware, timeoutMiddleware, } from "./middlewares/request-lock.middleware.js";
 import { startEnhancedReconciliationJob } from "./services/participantReconciliation.js";
@@ -115,6 +119,7 @@ app.use((req, res, next) => {
     // logTiming(req, "2-BODY_PARSER_START");
     next();
 });
+app.use("/webhooks", WebhookRouter.default);
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use((req, res, next) => {
@@ -319,6 +324,9 @@ app.use("/quiz", QuizRouter.default);
 app.use("/program", ProgramRouter.default);
 app.use("/qa", QArouter.default);
 app.use("/balance", BalanceRouter.default);
+// app.use("/ai", AIRouter.default);
+// app.use("/video-processing", VideoProcessingRouter.default);
+// app.use("/sports", SportsRouter.default);
 // ============================================
 // 404 HANDLER
 // ============================================

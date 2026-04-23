@@ -15,6 +15,10 @@ import {
   MonitorRouter,
   QArouter,
   BalanceRouter,
+  // AIRouter,
+  // VideoProcessingRouter,
+  // SportsRouter,
+  WebhookRouter
 } from "./routes/index.js";
 import { beaconHandler, authenticateTenant } from "./middlewares/index.js";
 import {
@@ -193,6 +197,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   // logTiming(req, "2-BODY_PARSER_START");
   next();
 });
+
+app.use("/webhooks", WebhookRouter.default);
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -436,6 +442,9 @@ app.use("/quiz", QuizRouter.default);
 app.use("/program", ProgramRouter.default);
 app.use("/qa", QArouter.default);
 app.use("/balance", BalanceRouter.default);
+// app.use("/ai", AIRouter.default);
+// app.use("/video-processing", VideoProcessingRouter.default);
+// app.use("/sports", SportsRouter.default);
 
 // ============================================
 // 404 HANDLER

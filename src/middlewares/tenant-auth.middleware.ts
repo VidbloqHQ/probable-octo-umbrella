@@ -156,6 +156,8 @@ async function prewarmCache() {
             rpcEndpoint: true,
             networkCluster: true,
             defaultStreamType: true,
+            webhookUrl: true,        // ← add
+            webhookSecret: true, 
             defaultFundingType: true,
           }
         }),
@@ -182,7 +184,7 @@ async function prewarmCache() {
         }
       });
 
-      console.log(`[Auth] Pre-warmed cache with ${recentTokens.length} frequently used API keys`);
+     // console.log(`[Auth] Pre-warmed cache with ${recentTokens.length} frequently used API keys`);
     }
   } catch (error) {
     console.error("[Auth] Failed to pre-warm cache:", error);
@@ -209,7 +211,7 @@ export const authenticateTenant = async (
   }
   
   const startTime = Date.now();
-  console.log(`[AUTH] Starting authentication`);
+  // console.log(`[AUTH] Starting authentication`);
   let success = false;
   
   try {
@@ -235,7 +237,7 @@ export const authenticateTenant = async (
         
         const elapsed = Date.now() - startTime;
         if (elapsed > 100) {
-          console.log(`[Auth] Cache hit but slow: ${elapsed}ms`);
+          // console.log(`[Auth] Cache hit but slow: ${elapsed}ms`);
         }
         
         // Update lastUsedAt asynchronously (fire and forget)
@@ -247,7 +249,7 @@ export const authenticateTenant = async (
           }),
           { maxRetries: 1, timeout: 2000 }
         ).catch(() => {});
-          console.log(`[AUTH] Authentication completed in ${Date.now() - startTime}ms`);
+         // console.log(`[AUTH] Authentication completed in ${Date.now() - startTime}ms`);
 
         return next();
       }
@@ -262,7 +264,7 @@ export const authenticateTenant = async (
         
         const elapsed = Date.now() - startTime;
         if (elapsed > 100) {
-          console.log(`[Auth] Partial cache hit but slow: ${elapsed}ms`);
+          // console.log(`[Auth] Partial cache hit but slow: ${elapsed}ms`);
         }
         
         // Update lastUsedAt asynchronously
@@ -314,6 +316,8 @@ export const authenticateTenant = async (
               networkCluster: true,
               defaultStreamType: true,
               defaultFundingType: true,
+              webhookUrl: true,        // ← add
+              webhookSecret: true, 
             }
           }
         }
@@ -456,7 +460,7 @@ export function getAuthStats() {
 // Clear cache (for emergencies or testing)
 export function clearAuthCache() {
   authCache.clear();
-  console.log('[Auth] Cache cleared');
+  // console.log('[Auth] Cache cleared');
 }
 
 // Export for testing
